@@ -1,0 +1,12 @@
+node_modules/
+dist/
+.env
+.env.local
+.env.*.local
+*.log
+
+/gee-service-account.json
+/server/.env
+/web/.env
+
+/.DS_Store

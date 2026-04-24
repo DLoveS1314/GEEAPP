@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>GEE + OpenLayers Demo</title>
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div>
+          <p class="eyebrow">Google Earth Engine</p>
+          <h1>Node.js + OpenLayers</h1>
+          <p class="summary">
+            前端通过本地 Node.js 服务请求 Earth Engine 图层信息，再以 OpenLayers XYZ 图层方式加载。
+          </p>
+        </div>
+
+        <label class="field" for="layerSelect">
+          <span>示例图层</span>
+          <select id="layerSelect"></select>
+        </label>
+
+        <button id="reloadButton" type="button">重新加载图层</button>
+
+        <dl class="meta" id="layerMeta"></dl>
+
+        <div class="status-panel">
+          <strong>状态</strong>
+          <p id="statusText">正在初始化...</p>
+        </div>
+      </aside>
+
+      <main class="map-wrap">
+        <div id="map" aria-label="Map"></div>
+      </main>
+    </div>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
