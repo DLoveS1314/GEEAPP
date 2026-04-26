@@ -6,7 +6,7 @@ dist/
 *.log
 
 /gee-service-account.json
-/server/.env
-/web/.env
+/backend/.env
+/front/.env
 
 /.DS_Store
