@@ -10,33 +10,43 @@
       </div>
 
       <div class="controls">
-        <label class="field" for="layerSelect">
-          <span>示例图层</span>
-          <select id="layerSelect" v-model="selectedLayerId" @change="loadLayer">
-            <option v-for="layer in availableLayers" :key="layer.id" :value="layer.id">
-              {{ layer.name }}
+        <label class="field" for="datasourceSelect">
+          <span>GEE 数据源</span>
+          <select id="datasourceSelect" v-model="selectedDatasourceId" @change="loadLayer">
+            <option v-for="source in availableDataSources" :key="source.id" :value="source.id">
+              {{ source.name }}
             </option>
           </select>
         </label>
 
-        <button type="button" @click="reloadLayer">重新加载图层</button>
-        <button type="button" @click="toggleRawData" :disabled="!demGeojson" :class="{ active: rawDataVisible }">
-          {{ rawDataVisible ? '隐藏原始数据' : '显示原始数据' }}
+        <button type="button" @click="reloadLayer" :disabled="isBusy || !selectedDatasourceId">
+          重新加载图层
         </button>
-        <button type="button" @click="sampleDem" :disabled="!demGeojson">
-          采样
+        <button type="button" @click="loadHexagons" :disabled="isBusy">
+          加载六角格
+        </button>
+        <button type="button" @click="sampleDem(false)" :disabled="isBusy">
+          采样 DEM
+        </button>
+        <button type="button" @click="sampleDem(true)" :disabled="isBusy">
+          采样并保存
+        </button>
+        <button type="button" @click="toggleRawData" :disabled="!hexagonGeojson && !demGeojson" :class="{ active: rawDataVisible }">
+          {{ rawDataVisible ? '显示 DEM 渲染' : '显示原始六角格' }}
         </button>
       </div>
 
-      <div class="meta" v-if="currentLayer">
+      <div class="meta" v-if="currentDatasource || currentLayer">
         <dt>名称</dt>
-        <dd>{{ currentLayer.name || '-' }}</dd>
+        <dd>{{ currentDatasource?.name || currentLayer?.name || '-' }}</dd>
+        <dt>类型</dt>
+        <dd>{{ currentDatasource?.type || currentLayer?.datasourceType || '-' }}</dd>
         <dt>数据集</dt>
-        <dd>{{ currentLayer.dataset || '-' }}</dd>
+        <dd>{{ currentDatasource?.dataset || currentLayer?.dataset || '-' }}</dd>
         <dt>Project</dt>
-        <dd>{{ currentLayer.projectId || '-' }}</dd>
+        <dd>{{ currentLayer?.projectId || '-' }}</dd>
         <dt>说明</dt>
-        <dd>{{ currentLayer.description || '-' }}</dd>
+        <dd>{{ currentDatasource?.description || currentLayer?.description || '-' }}</dd>
       </div>
 
       <div class="status-panel">
@@ -74,72 +84,101 @@
 </template>
 
 <script setup>
-import { ref, onMounted, watch } from 'vue'
-import { fetchHealth, fetchL0DemGeojson, fetchLayer, fetchLayers } from './api.js'
+import { computed, onMounted, ref } from 'vue'
+import { fetchDataSources, fetchHexagonGeojson, fetchLayer, sampleDem as requestSampleDem } from './api.js'
 import { useMap } from './useMap.js'
 import LayerPanel from './components/LayerPanel.vue'
 import DemSettings from './components/DemSettings.vue'
 
 const mapRef = ref(null)
-const selectedLayerId = ref('')
-const availableLayers = ref([])
+const selectedDatasourceId = ref('')
+const availableDataSources = ref([])
 const currentLayer = ref(null)
 const statusMessage = ref('正在初始化...')
 const statusError = ref(false)
+const hexagonGeojson = ref(null)
 const demGeojson = ref(null)
 const showDemSettings = ref(false)
 const activeLayer = ref(null)
 const mapLayers = ref([])
 const rawDataVisible = ref(false)
+const isBusy = ref(false)
+const demConfig = ref({
+  colorRamp: 'default',
+  minDem: 0,
+  maxDem: 5000,
+  showContours: false,
+  contourInterval: 100,
+  smoothTransitions: true
+})
 
-const { initMap, setGeeLayer, setDemHexagons, addLayer, removeLayer, updateLayerVisibility, updateLayerDemStyle, setRawDataStyle } = useMap()
+const {
+  initMap,
+  setGeeLayer,
+  setDemHexagons,
+  setRawHexagons,
+  updateLayerVisibility,
+  updateLayerDemStyle,
+  setRawDataStyle,
+  getViewBounds
+} = useMap()
+
+const currentDatasource = computed(() => {
+  return availableDataSources.value.find((source) => source.id === selectedDatasourceId.value) || null
+})
 
 function setStatus(message, isError = false) {
   statusMessage.value = message
   statusError.value = isError
 }
 
+function requireViewBounds() {
+  const bounds = getViewBounds()
+  if (!bounds) {
+    throw new Error('无法获取当前地图视图范围')
+  }
+  return bounds
+}
+
 async function bootstrap() {
   try {
-    const [{ layers }, health] = await Promise.all([fetchLayers(), fetchHealth()])
-    
-    availableLayers.value = layers
-    selectedLayerId.value = layers[0]?.id || ''
-    
-    setStatus(`后端就绪，当前 GEE Project: ${health.gee.projectId}`)
-    
-    if (layers[0]) {
-      await loadLayer()
-    }
-    
-    demGeojson.value = await fetchL0DemGeojson()
-    setDemHexagons(demGeojson.value)
-    
+    const { dataSources } = await fetchDataSources()
+    availableDataSources.value = dataSources
+    selectedDatasourceId.value = dataSources.find((source) => source.id === 'dem-srtm')?.id || dataSources[0]?.id || ''
+
     updateMapLayers()
+
+    if (selectedDatasourceId.value) {
+      await loadLayer()
+    } else {
+      setStatus('未找到可用 GEE 数据源', true)
+    }
   } catch (error) {
     setStatus(error.message, true)
   }
 }
 
 async function loadLayer() {
-  if (!selectedLayerId.value) return
-  
+  if (!selectedDatasourceId.value) return
+
+  isBusy.value = true
   setStatus('正在请求 Earth Engine 图层...')
-  
+
   try {
-    const layer = await fetchLayer(selectedLayerId.value)
-    
+    const layer = await fetchLayer(selectedDatasourceId.value)
+
     if (!layer.url) {
       throw new Error('Earth Engine did not return a tile URL.')
     }
-    
+
     currentLayer.value = layer
     setGeeLayer(layer)
     setStatus(`图层已加载：${layer.name}`)
-    
     updateMapLayers()
   } catch (error) {
     setStatus(error.message, true)
+  } finally {
+    isBusy.value = false
   }
 }
 
@@ -147,81 +186,94 @@ async function reloadLayer() {
   await loadLayer()
 }
 
-function toggleRawData() {
-  if (rawDataVisible.value) {
-    setDemHexagons(demGeojson.value)
-    rawDataVisible.value = false
-    setStatus('已切换为 DEM 渲染模式')
-  } else {
-    setRawDataStyle()
+async function loadHexagons() {
+  isBusy.value = true
+  setStatus('正在按当前视图加载 L4 六角格...')
+
+  try {
+    const bounds = requireViewBounds()
+    const geojson = await fetchHexagonGeojson({ bounds, limit: 500 })
+    hexagonGeojson.value = geojson
+    demGeojson.value = null
     rawDataVisible.value = true
-    setStatus('已显示原始数据')
+    setRawHexagons(geojson, { fit: false })
+    setStatus(`已加载当前视图 L4 六角格 ${geojson.features?.length || 0} 个`)
+    updateMapLayers()
+  } catch (error) {
+    setStatus(error.message, true)
+  } finally {
+    isBusy.value = false
   }
 }
 
-async function sampleDem() {
+async function sampleDem(save = false) {
+  isBusy.value = true
+  setStatus(save ? '正在采样并保存 DEM 数据...' : '正在采样 DEM 数据...')
+
   try {
-    setStatus('正在采样 DEM 数据...')
-    const center = mapRef.value?.$map?.getView()?.getCenter()
-    
-    if (!center) {
-      setStatus('无法获取地图中心点', true)
-      return
-    }
-    
-    const response = await fetch('/api/gee/dem/sample', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        center: center,
-        projection: 'EPSG:3857'
-      })
-    })
-    
-    const result = await response.json()
-    
-    if (result.hexagons) {
-      setDemHexagons(result.hexagons)
-      setStatus(`DEM 采样完成，共 ${result.hexagons.features?.length || 0} 个六边形`)
-    }
+    const payload = hexagonGeojson.value
+      ? { geojson: hexagonGeojson.value, save, datasourceId: 'dem-srtm', maxFeatures: 500 }
+      : { bounds: requireViewBounds(), save, datasourceId: 'dem-srtm', limit: 500, maxFeatures: 500 }
+    const result = await requestSampleDem(payload)
+
+    demGeojson.value = result.hexagons
+    rawDataVisible.value = false
+    setDemHexagons(result.hexagons, demConfig.value, { fit: false })
+
+    const savedMessage = result.savedPath ? `，已保存到 ${result.savedPath}` : ''
+    setStatus(`DEM 采样完成，共 ${result.sampledCount || 0} 个六角格${savedMessage}`)
+    updateMapLayers()
   } catch (error) {
     setStatus(`采样失败：${error.message}`, true)
+  } finally {
+    isBusy.value = false
+  }
+}
+
+function toggleRawData() {
+  if (rawDataVisible.value && demGeojson.value) {
+    setDemHexagons(demGeojson.value, demConfig.value, { fit: false })
+    rawDataVisible.value = false
+    setStatus('已切换为 DEM 渲染模式')
+    return
+  }
+
+  if (hexagonGeojson.value) {
+    setRawHexagons(hexagonGeojson.value, { fit: false })
+    rawDataVisible.value = true
+    setStatus('已显示原始 L4 六角格')
+    return
+  }
+
+  if (demGeojson.value) {
+    setRawDataStyle()
+    rawDataVisible.value = true
+    setStatus('已显示 DEM 采样标签')
   }
 }
 
 function updateMapLayers() {
   mapLayers.value = [
     {
-      id: 'base',
-      name: '底图',
-      type: 'base',
-      visible: true,
-      hasDemSettings: false
-    },
-    {
       id: 'gee',
-      name: currentLayer.value?.name || 'GEE 图层',
+      name: currentLayer.value?.name || currentDatasource.value?.name || 'GEE 图层',
       type: 'gee',
       visible: true,
       hasDemSettings: false
     },
     {
       id: 'dem',
-      name: 'DEM 六边形',
+      name: demGeojson.value ? 'DEM 采样六角格' : 'L4 六角格',
       type: 'dem',
       visible: true,
-      hasDemSettings: true,
-      demConfig: {
-        colorRamp: 'default',
-        minDem: 0,
-        maxDem: 5000
-      }
+      hasDemSettings: Boolean(demGeojson.value),
+      demConfig: demConfig.value
     }
   ]
 }
 
 function handleVisibilityChange(layerId, visible) {
-  const layer = mapLayers.value.find(l => l.id === layerId)
+  const layer = mapLayers.value.find((item) => item.id === layerId)
   if (layer) {
     layer.visible = visible
     updateLayerVisibility(layerId, visible)
@@ -234,27 +286,29 @@ function handleDemSettings(layer) {
 }
 
 function saveDemSettings(config) {
-  if (activeLayer.value) {
-    activeLayer.value.demConfig = config
-    updateLayerDemStyle(config)
-    showDemSettings.value = false
-  }
+  demConfig.value = config
+  updateLayerDemStyle(config)
+  updateMapLayers()
+  showDemSettings.value = false
 }
 
 function handleExportLayer(layerId) {
-  const layer = mapLayers.value.find(l => l.id === layerId)
-  if (layer && layer.type === 'dem' && demGeojson.value) {
-    const blob = new Blob([JSON.stringify(demGeojson.value, null, 2)], {
-      type: 'application/json'
-    })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `dem-hexagons-${Date.now()}.json`
-    a.click()
-    URL.revokeObjectURL(url)
-    setStatus('DEM 数据已导出')
+  const layer = mapLayers.value.find((item) => item.id === layerId)
+  if (!layer || layer.type !== 'dem' || !demGeojson.value) {
+    setStatus('当前没有可导出的 DEM 采样结果', true)
+    return
   }
+
+  const blob = new Blob([JSON.stringify(demGeojson.value, null, 2)], {
+    type: 'application/json'
+  })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `dem-hexagons-${Date.now()}.json`
+  a.click()
+  URL.revokeObjectURL(url)
+  setStatus('DEM 数据已导出')
 }
 
 onMounted(() => {

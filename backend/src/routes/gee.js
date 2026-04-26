@@ -1,11 +1,9 @@
 /**
  * @fileoverview Google Earth Engine API 路由
- * 
- * 本文件定义与 GEE 相关的 HTTP 接口：
- * - GET /api/gee/layers - 获取图层目录
- * - GET /api/gee/layers/:id - 获取指定图层
- * - GET /api/gee/dem/l0 - 获取 DEM 六角格 GeoJSON
- * 
+ *
+ * 提供 JSON 数据源目录、GEE 瓦片图层、L4 六角格按视图范围读取，
+ * 以及基于六角格中心点的 DEM 采样接口。
+ *
  * @module routes/gee
  */
 
@@ -13,61 +11,78 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Router } from 'express';
-import { getLayerById, getLayerCatalog } from '../services/geeService.js';
+import {
+  filterGeojsonByBounds,
+  getDatasourceCatalog,
+  getLayerById,
+  getLayerCatalog,
+  sampleDemForHexagons,
+} from '../services/geeService.js';
 
-// 获取当前文件所在目录路径
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const backendRoot = path.resolve(__dirname, '..', '..');
-
-// DEM 数据文件路径：backend/output/L0_dem.geojson
 const l0DemPath = path.resolve(backendRoot, 'output', 'L0_dem.geojson');
+const l4HexagonPath = path.resolve(backendRoot, 'data', 'L4.geojson');
+const outputDir = path.resolve(backendRoot, 'output');
 
-/**
- * 创建 Express 路由器
- */
 const router = Router();
+
+function createError(message, status = 500) {
+  const error = new Error(message);
+  error.status = status;
+  return error;
+}
+
+function parseBoundsFromQuery(query) {
+  const { minLon, minLat, maxLon, maxLat } = query;
+  if ([minLon, minLat, maxLon, maxLat].some((value) => value === undefined)) {
+    return null;
+  }
+
+  return [minLon, minLat, maxLon, maxLat].map(Number);
+}
+
+async function readL4Geojson() {
+  const raw = await fs.readFile(l4HexagonPath, 'utf8');
+  return JSON.parse(raw);
+}
 
 /**
  * GET /api/gee/dem/l0
- * 
- * 返回 L0 级别的 DEM 六角格 GeoJSON 数据
- * 
- * 该数据由脚本预先生成，包含六角格网几何及对应的高程值
- * 
- * @route {GET} /dem/l0
- * @returns {GeoJSON} FeatureCollection 格式的 DEM 数据
+ *
+ * 保留旧的预计算 L0 DEM 数据接口，作为历史数据或 fallback 使用。
  */
 router.get('/dem/l0', async (_req, res, next) => {
   try {
-    // 读取预先计算的 DEM GeoJSON 文件
     const raw = await fs.readFile(l0DemPath, 'utf8');
-    
-    // 设置响应类型为 GeoJSON
     res.type('application/geo+json').send(raw);
   } catch (error) {
-    // 文件不存在错误
     if (error.code === 'ENOENT') {
       error.status = 404;
       error.message = 'DEM GeoJSON output was not found. Run npm run dem:l0 in backend first.';
     }
 
-    // 传递给错误处理中间件
     next(error);
   }
 });
 
 /**
- * GET /api/gee/layers
- * 
- * 获取所有可用图层的目录列表
- * 
- * @route {GET} /layers
- * @returns {Object} 包含 layers 数组的响应对象
+ * GET /api/gee/datasources
+ *
+ * 返回 datasource JSON 中配置的数据源，不触发 GEE 初始化。
  */
+router.get('/datasources', async (_req, res, next) => {
+  try {
+    const dataSources = await getDatasourceCatalog();
+    res.json({ dataSources });
+  } catch (error) {
+    next(error);
+  }
+});
+
 router.get('/layers', async (_req, res, next) => {
   try {
-    // 从 GEE 服务获取图层目录
     const layers = await getLayerCatalog();
     res.json({ layers });
   } catch (error) {
@@ -75,21 +90,94 @@ router.get('/layers', async (_req, res, next) => {
   }
 });
 
-/**
- * GET /api/gee/layers/:layerId
- * 
- * 根据 ID 获取单个图层的完整配置
- * 
- * @route {GET} /layers/:layerId
- * @param {string} layerId - 图层 ID（如 sentinel-rgb, ndvi）
- * @returns {Object} 图层配置对象，包含 url、center、zoom 等
- */
 router.get('/layers/:layerId', async (req, res, next) => {
   try {
-    // 根据 ID 获取图层详情
     const layer = await getLayerById(req.params.layerId);
     res.json(layer);
   } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * GET /api/gee/geojson/hexagons
+ *
+ * 按当前地图视图范围从 L4.geojson 读取六角格。L4 文件较大，因此必须
+ * 提供 bounds 查询参数，并通过 limit 限制返回数量。
+ */
+router.get('/geojson/hexagons', async (req, res, next) => {
+  try {
+    const bounds = parseBoundsFromQuery(req.query);
+    if (!bounds) {
+      throw createError('Bounds query parameters are required for L4 hexagons.', 400);
+    }
+
+    const geojson = await readL4Geojson();
+    const filtered = filterGeojsonByBounds(geojson, bounds, {
+      limit: req.query.limit,
+      maxLimit: 2000,
+    });
+
+    res.type('application/geo+json').json(filtered);
+  } catch (error) {
+    if (error instanceof SyntaxError) {
+      error.status = 500;
+      error.message = 'L4.geojson contains invalid JSON.';
+    }
+
+    next(error);
+  }
+});
+
+/**
+ * POST /api/gee/dem/sample
+ *
+ * 支持传入已加载 GeoJSON，或只传 bounds 后由后端读取 L4 子集。
+ * save=true 时会把采样结果写入 backend/output，便于后续复用。
+ */
+router.post('/dem/sample', async (req, res, next) => {
+  try {
+    const { bounds, geojson, save } = req.body || {};
+    let targetGeojson = geojson;
+
+    if (!targetGeojson) {
+      if (!bounds) {
+        throw createError('Either geojson or bounds is required for DEM sampling.', 400);
+      }
+
+      const l4Geojson = await readL4Geojson();
+      targetGeojson = filterGeojsonByBounds(l4Geojson, bounds, {
+        limit: req.body?.limit || 500,
+        maxLimit: 1000,
+      });
+    }
+
+    const hexagons = await sampleDemForHexagons(targetGeojson, {
+      datasourceId: req.body?.datasourceId,
+      maxFeatures: req.body?.maxFeatures || 500,
+      scale: req.body?.scale || 30,
+    });
+
+    const payload = {
+      hexagons,
+      sampledCount: hexagons.features.length,
+    };
+
+    if (save) {
+      await fs.mkdir(outputDir, { recursive: true });
+      const filename = `dem-sampled-${Date.now()}.geojson`;
+      const absolutePath = path.join(outputDir, filename);
+      await fs.writeFile(absolutePath, JSON.stringify(hexagons, null, 2), 'utf8');
+      payload.savedPath = path.relative(backendRoot, absolutePath).replace(/\\/g, '/');
+    }
+
+    res.json(payload);
+  } catch (error) {
+    if (error instanceof SyntaxError) {
+      error.status = 500;
+      error.message = 'L4.geojson contains invalid JSON.';
+    }
+
     next(error);
   }
 });

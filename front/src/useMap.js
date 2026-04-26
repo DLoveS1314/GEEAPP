@@ -14,13 +14,11 @@ import Map from 'ol/Map.js'
 import View from 'ol/View.js'
 import TileLayer from 'ol/layer/Tile.js'
 import VectorLayer from 'ol/layer/Vector.js'
-import OSM from 'ol/source/OSM.js'
 import VectorSource from 'ol/source/Vector.js'
 import XYZ from 'ol/source/XYZ.js'
 import GeoJSON from 'ol/format/GeoJSON.js'
-import { fromLonLat, toLonLat } from 'ol/proj.js'
+import { fromLonLat, transformExtent } from 'ol/proj.js'
 import { Fill, Stroke, Style, Text } from 'ol/style.js'
-import { easeOut } from 'ol/easing.js'
 
 // ========== 模块级变量 ==========
 
@@ -44,11 +42,6 @@ let geeLayer = null
  * 显示带高程值的六边形网格
  */
 let demHexLayer = null
-
-/**
- * 底图图层（OSM）
- */
-let baseLayer = null
 
 // ========== DEM 渲染样式 ==========
 
@@ -181,7 +174,7 @@ function createRawDataStyle() {
   return function(feature) {
     const dem = Number(feature.get('dem'))
     // 格式化高程标签（如 "1250m"）
-    const label = dem !== null && dem !== undefined ? `${dem}m` : ''
+    const label = Number.isFinite(dem) ? `${Math.round(dem)}m` : ''
 
     return new Style({
       fill: new Fill({
@@ -206,6 +199,18 @@ function createRawDataStyle() {
   }
 }
 
+function createRawHexagonStyle() {
+  return new Style({
+    fill: new Fill({
+      color: 'rgba(34, 197, 94, 0.08)',
+    }),
+    stroke: new Stroke({
+      color: 'rgba(34, 197, 94, 0.9)',
+      width: 1.2,
+    }),
+  })
+}
+
 // ========== Vue Composable ==========
 
 /**
@@ -220,19 +225,13 @@ export function useMap() {
   /**
    * 初始化地图
    * 
-   * 创建底图、GEE 图层、DEM 六角格图层
+   * 创建 GEE 图层和六角格矢量图层，不再加载 OSM 底图。
    * 
    * @function initMap
    * @param {HTMLElement} target - 地图容器元素
    */
   function initMap(target) {
     if (!target) return
-
-    // 创建 OSM 底图
-    baseLayer = new TileLayer({
-      source: new OSM(),
-      visible: true,
-    })
 
     // 创建 GEE 影像图层（初始为空，等待加载）
     geeLayer = new TileLayer({
@@ -251,10 +250,10 @@ export function useMap() {
     // 创建地图实例
     map = new Map({
       target,
-      layers: [baseLayer, geeLayer, demHexLayer],
+      layers: [geeLayer, demHexLayer],
       view: new View({
-        center: fromLonLat([116.55, 40.1]),  // 北京中心
-        zoom: 8,
+        center: fromLonLat([121.334757975, 25.09106329]),
+        zoom: 11,
       }),
     })
 
@@ -288,8 +287,8 @@ export function useMap() {
     geeLayer.setVisible(true)
 
     // 平滑移动到指定视图
-    const center = layerConfig.center || [116.55, 40.1]
-    const zoom = layerConfig.zoom || 8
+    const center = layerConfig.center || [121.334757975, 25.09106329]
+    const zoom = layerConfig.zoom || 11
 
     map.getView().animate({
       center: fromLonLat(center),
@@ -304,8 +303,9 @@ export function useMap() {
    * @function setDemHexagons
    * @param {GeoJSON} geojson - GeoJSON FeatureCollection
    * @param {Object} [config={}] - 样式配置
+   * @param {Object} [options={}] - fit=false 时保留当前视图
    */
-  function setDemHexagons(geojson, config = {}) {
+  function setDemHexagons(geojson, config = {}, options = {}) {
     if (!demHexLayer || !map) return
 
     // 解析 GeoJSON 并转换为地图坐标
@@ -319,11 +319,32 @@ export function useMap() {
     demHexLayer.setStyle(createDemStyle(config))
 
     // 如果有数据，调整视图适应范围
-    if (source.getFeatures().length > 0) {
+    if (options.fit !== false && source.getFeatures().length > 0) {
       map.getView().fit(source.getExtent(), {
         padding: [60, 60, 60, 60],  // 四边留白
         duration: 500,
         maxZoom: 10,
+      })
+    }
+  }
+
+  function setRawHexagons(geojson, options = {}) {
+    if (!demHexLayer || !map) return
+
+    const source = new VectorSource({
+      features: new GeoJSON().readFeatures(geojson, {
+        featureProjection: 'EPSG:3857',
+      }),
+    })
+
+    demHexLayer.setSource(source)
+    demHexLayer.setStyle(createRawHexagonStyle())
+
+    if (options.fit !== false && source.getFeatures().length > 0) {
+      map.getView().fit(source.getExtent(), {
+        padding: [60, 60, 60, 60],
+        duration: 500,
+        maxZoom: 12,
       })
     }
   }
@@ -354,17 +375,13 @@ export function useMap() {
    * 更新图层可见性
    * 
    * @function updateLayerVisibility
-   * @param {string} layerId - 图层 ID ('base' | 'gee' | 'dem')
+   * @param {string} layerId - 图层 ID ('gee' | 'dem')
    * @param {boolean} visible - 是否可见
    */
   function updateLayerVisibility(layerId, visible) {
     if (!map) return
 
-    const layers = map.getLayers().getArray()
-    
-    if (layerId === 'base' && baseLayer) {
-      baseLayer.setVisible(visible)
-    } else if (layerId === 'gee' && geeLayer) {
+    if (layerId === 'gee' && geeLayer) {
       geeLayer.setVisible(visible)
     } else if (layerId === 'dem' && demHexLayer) {
       demHexLayer.setVisible(visible)
@@ -394,16 +411,33 @@ export function useMap() {
     demHexLayer.setStyle(createRawDataStyle())
   }
 
+  /**
+   * 获取当前视图经纬度范围。
+   *
+   * OpenLayers 视图使用 EPSG:3857，后端 GeoJSON/GEE 过滤使用 EPSG:4326。
+   */
+  function getViewBounds() {
+    if (!map) return null
+
+    const size = map.getSize()
+    if (!size) return null
+
+    const extent = map.getView().calculateExtent(size)
+    return transformExtent(extent, 'EPSG:3857', 'EPSG:4326')
+  }
+
   // 导出所有公共方法
   return {
     mapRef,
     initMap,
     setGeeLayer,
     setDemHexagons,
+    setRawHexagons,
     addLayer,
     removeLayer,
     updateLayerVisibility,
     updateLayerDemStyle,
-    setRawDataStyle
+    setRawDataStyle,
+    getViewBounds
   }
 }

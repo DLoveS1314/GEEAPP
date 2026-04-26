@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "GEE 数据源配置",
+  "description": "Google Earth Engine 数据源配置文件，包含 RGB、地表覆盖、DEM 等数据源的详细信息",
+  "dataSources": [
+    {
+      "id": "sentinel-rgb",
+      "name": "Sentinel-2 RGB",
+      "type": "RGB",
+      "description": "Sentinel-2 地表反射率和谐化产品，包含红、绿、蓝波段，适用于地表覆盖分析。数据来自 2024 年 4 月至 10 月生长季，云量低于 10% 的影像中值合成。",
+      "dataset": "COPERNICUS/S2_SR_HARMONIZED",
+      "visualization": {
+        "bands": ["B4", "B3", "B2"],
+        "min": 0,
+        "max": 3000,
+        "gamma": 1.1
+      },
+      "defaultCenter": [121.334757975, 25.09106329],
+      "defaultZoom": 11,
+      "bounds": [121.16522535, 25.00072178, 121.5042906, 25.1814048]
+    },
+    {
+      "id": "landcover",
+      "name": "地表覆盖数据 (ESA WorldCover)",
+      "type": "LANDCOVER",
+      "description": "全球地表覆盖分类数据，提供 10 米分辨率的土地利用分类，包括森林、水体、建筑区、农田等 11 种地类信息。",
+      "dataset": "ESA/WorldCover/v200",
+      "visualization": {
+        "min": 10,
+        "max": 100,
+        "palette": ["006400", "ffbb22", "ffff4c", "f096ff", "fa0000", "b4b4b4", "f0f0f0", "0064c8", "0096a0", "00cf75", "fae6a0"]
+      },
+      "defaultCenter": [121.334757975, 25.09106329],
+      "defaultZoom": 11,
+      "bounds": [121.16522535, 25.00072178, 121.5042906, 25.1814048]
+    },
+    {
+      "id": "dem-srtm",
+      "name": "DEM 高程数据 (SRTM)",
+      "type": "DEM",
+      "description": "航天飞机雷达地形高程数据 (SRTM)，提供全球 30 米分辨率的地表高程信息。高程范围从海平面到珠穆朗玛峰 (8848 米)。",
+      "dataset": "USGS/SRTMGL1_003",
+      "visualization": {
+        "min": 0,
+        "max": 8848,
+        "palette": ["blue", "cyan", "green", "yellow", "red", "white"]
+      },
+      "defaultCenter": [121.334757975, 25.09106329],
+      "defaultZoom": 11,
+      "bounds": [121.16522535, 25.00072178, 121.5042906, 25.1814048]
+    }
+  ]
+}

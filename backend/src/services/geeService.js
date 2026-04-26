@@ -1,44 +1,30 @@
 /**
  * @fileoverview Google Earth Engine 服务层
- * 
- * 本文件提供 Earth Engine 核心业务逻辑：
- * - 构建 Sentinel-2 RGB 和 NDVI 图层
- * - 生成地图瓦片 URL
- * - 管理图层目录
- * 
+ *
+ * 本文件负责从 JSON 配置读取 GEE 数据源、构建瓦片图层，并对视图内
+ * L4 六角格执行中心点 DEM 采样。纯 JSON/GeoJSON 处理函数不初始化 GEE，
+ * 避免普通数据读取被凭证或网络状态阻塞。
+ *
  * @module services/geeService
  */
 
 import ee from '@google/earthengine';
 import { ensureEarthEngineInitialized } from '../config/gee.js';
+import { fileURLToPath } from 'node:url';
+import path from 'node:path';
+import fs from 'node:fs/promises';
 
-// ========== 地理范围配置 ==========
+let datasourcesCache = null;
 
-/**
- * 北京地区的经纬度边界
- * 
- * 格式：[最小经度, 最小纬度, 最大经度, 最大纬度]
- */
-const beijingBounds = [115.7, 39.4, 117.6, 40.8];
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const datasourcesPath = path.resolve(__dirname, '..', 'config', 'datasources.json');
 
-/**
- * 地图默认中心点
- * 
- * 经度 116.55, 纬度 40.1（北京中心区域）
- */
-const defaultCenter = [116.55, 40.1];
+const defaultCenter = [121.334757975, 25.09106329];
+const defaultZoom = 11;
+const defaultBounds = [121.16522535, 25.00072178, 121.5042906, 25.1814048];
+const requiredDatasourceFields = ['id', 'name', 'type', 'description', 'dataset', 'visualization'];
 
-// ========== 错误处理 ==========
-
-/**
- * 创建带有 HTTP 状态码的错误对象
- * 
- * @function createError
- * @param {string} message - 错误消息
- * @param {number} status - HTTP 状态码
- * @param {Error} [cause] - 原始错误
- * @returns {Error} 包含 status 和 cause 属性的错误对象
- */
 function createError(message, status = 500, cause) {
   const error = new Error(message);
   error.status = status;
@@ -46,21 +32,8 @@ function createError(message, status = 500, cause) {
   return error;
 }
 
-// ========== 地图瓦片处理 ==========
-
-/**
- * 获取图像的马赛克（map）数据
- * 
- * 将 GEE 图像转换为可在 Web 地图中显示的瓦片图层
- * 
- * @function getMapData
- * @param {ee.Image} image - Earth Engine 图像对象
- * @param {Object} visualization - 可视化参数（波段、范围等）
- * @returns {Promise<Object>} 包含 mapid、token、urlFormat 等信息的对象
- */
 function getMapData(image, visualization) {
   return new Promise((resolve, reject) => {
-    // 异步调用 GEE API 生成地图
     image.getMap(visualization, (map, error) => {
       if (error) {
         reject(createError('Failed to generate Earth Engine map tiles.', 502, error));
@@ -72,213 +45,313 @@ function getMapData(image, visualization) {
   });
 }
 
-/**
- * 从 GEE map 对象构建瓦片 URL
- * 
- * 支持新旧两种 GEE API 格式：
- * - 新项目格式：projects/{projectId}/map/{mapid}
- * - 传统格式：/map/{mapid}/tiles/{z}/{x}/{y}
- * 
- * @function getTileUrl
- * @param {Object} map - GEE 返回的 map 对象
- * @param {string} projectId - GCP 项目 ID
- * @returns {string|null} 可用于 XYZ 图层的瓦片 URL 模板
- */
-function getTileUrl(map, projectId) {
-  // 优先使用 API 直接返回的 URL 格式
+function getEeInfo(eeObject, message = 'Failed to read Earth Engine data.') {
+  return new Promise((resolve, reject) => {
+    eeObject.getInfo((result, error) => {
+      if (error) {
+        reject(createError(message, 502, error));
+        return;
+      }
+
+      resolve(result);
+    });
+  });
+}
+
+function getTileUrl(map) {
   if (map.urlFormat) return map.urlFormat;
   if (map.url_format) return map.url_format;
   if (map.tile_fetcher?.url_format) return map.tile_fetcher.url_format;
-
-  // 如果没有预生成的 URL，则手动构建
   if (!map.mapid) return null;
 
-  // 对 mapid 进行 URL 编码（处理包含斜杠的情况）
   const encodedMapId = String(map.mapid)
     .split('/')
     .map(encodeURIComponent)
     .join('/');
-  
-  // 构建 token 查询参数（如果有）
   const tokenQuery = map.token ? `?token=${encodeURIComponent(map.token)}` : '';
 
-  // 根据 mapid 格式决定使用哪种 URL 模式
   if (String(map.mapid).startsWith('projects/')) {
-    // 新版 GEE API 格式
     return `https://earthengine.googleapis.com/v1/${encodedMapId}/tiles/{z}/{x}/{y}${tokenQuery}`;
   }
 
-  // 传统 GEE API 格式
   return `https://earthengine.googleapis.com/map/${encodedMapId}/{z}/{x}/{y}${tokenQuery}`;
 }
 
+function sanitizeDatasource(source) {
+  return {
+    id: source.id,
+    name: source.name,
+    type: source.type,
+    description: source.description,
+    dataset: source.dataset,
+    visualization: source.visualization,
+    defaultCenter: source.defaultCenter || defaultCenter,
+    defaultZoom: source.defaultZoom || defaultZoom,
+    bounds: source.bounds || defaultBounds,
+  };
+}
+
+function validateDatasourceConfig(config) {
+  if (!config || !Array.isArray(config.dataSources)) {
+    throw createError('datasources.json must contain a dataSources array.', 500);
+  }
+
+  for (const [index, source] of config.dataSources.entries()) {
+    const missingField = requiredDatasourceFields.find((field) => source[field] === undefined || source[field] === null);
+    if (missingField) {
+      throw createError(`datasources.json dataSources[${index}] is missing required field: ${missingField}.`, 500);
+    }
+  }
+}
+
 /**
- * 构建图层响应数据
- * 
- * 将 GEE 图像转换为前端可用的图层配置对象
- * 
- * @function buildLayerPayload
- * @param {string} name - 图层名称
- * @param {Function} imageFactory - 生成 ee.Image 的工厂函数
- * @param {Object} visualization - 可视化参数
- * @param {Object} [metadata={}] - 额外元数据
- * @returns {Promise<Object>} 包含 url、center、zoom 等信息的图层配置
+ * 读取并缓存后端数据源配置。
+ *
+ * @returns {Promise<Array>} 已校验的数据源配置数组
  */
-async function buildLayerPayload(name, imageFactory, visualization, metadata = {}) {
-  // 确保 GEE 已初始化并获取项目 ID
+async function loadDatasourceConfig() {
+  if (datasourcesCache) return datasourcesCache;
+
+  try {
+    const raw = await fs.readFile(datasourcesPath, 'utf8');
+    const config = JSON.parse(raw);
+    validateDatasourceConfig(config);
+    datasourcesCache = config.dataSources.map(sanitizeDatasource);
+    return datasourcesCache;
+  } catch (error) {
+    if (error instanceof SyntaxError) {
+      throw createError('datasources.json contains invalid JSON.', 500, error);
+    }
+    if (error.status) throw error;
+    throw createError('Failed to load datasource configuration.', 500, error);
+  }
+}
+
+function buildSentinelRgbImage(source) {
+  return ee
+    .ImageCollection(source.dataset)
+    .filterDate('2024-04-01', '2024-10-31')
+    .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 10))
+    .median();
+}
+
+function buildLandcoverImage(source) {
+  return ee.ImageCollection(source.dataset).first().select('Map');
+}
+
+function buildDemImage(source) {
+  return ee.Image(source.dataset).select('elevation');
+}
+
+function buildImageFactory(source) {
+  if (source.type === 'RGB') return () => buildSentinelRgbImage(source);
+  if (source.type === 'LANDCOVER') return () => buildLandcoverImage(source);
+  if (source.type === 'DEM') return () => buildDemImage(source);
+  throw createError(`Unsupported datasource type: ${source.type}`, 400);
+}
+
+async function buildLayerPayload(source) {
   const { projectId } = await ensureEarthEngineInitialized();
-  
-  // 生成图像对象
-  const image = imageFactory();
-  
-  // 获取地图瓦片信息
-  const map = await getMapData(image, visualization);
-  
-  // 构建瓦片 URL
-  const url = getTileUrl(map, projectId);
+  const map = await getMapData(buildImageFactory(source)(), source.visualization);
+  const url = getTileUrl(map);
 
   return {
-    id: metadata.id,
-    name,
-    type: 'xyz',  // 图层类型：XYZ 瓦片
+    id: source.id,
+    name: source.name,
+    type: 'xyz',
     url,
     mapId: map.mapid || null,
     token: map.token || '',
     projectId,
-    attribution: 'Google Earth Engine',  // 归属信息
-    visParams: visualization,  // 可视化参数
-    center: metadata.center || defaultCenter,  // 默认中心点
-    zoom: metadata.zoom || 8,  // 默认缩放级别
-    bounds: metadata.bounds || beijingBounds,  // 地理边界
-    description: metadata.description || '',
-    dataset: metadata.dataset || '',
+    attribution: 'Google Earth Engine',
+    visParams: source.visualization,
+    center: source.defaultCenter,
+    zoom: source.defaultZoom,
+    bounds: source.bounds,
+    description: source.description,
+    dataset: source.dataset,
+    datasourceType: source.type,
   };
 }
 
-// ========== 地理边界处理 ==========
-
-/**
- * 创建北京区域的矩形几何对象
- * 
- * @function getBeijingArea
- * @returns {ee.Geometry.Rectangle} Earth Engine 矩形几何对象
- */
-function getBeijingArea() {
-  return ee.Geometry.Rectangle(beijingBounds);
+function isFiniteNumber(value) {
+  return Number.isFinite(Number(value));
 }
 
-// ========== 图像构建函数 ==========
+function normalizeBounds(bounds) {
+  if (!Array.isArray(bounds) || bounds.length !== 4 || !bounds.every(isFiniteNumber)) {
+    throw createError('Bounds must be [minLon, minLat, maxLon, maxLat].', 400);
+  }
 
-/**
- * 构建 Sentinel-2 RGB 合成图像
- * 
- * 获取 2024 年 4 月至 10 月期间云量低于 10% 的影像，
- * 使用中值合成生成无云 RGB 图像
- * 
- * @function buildSentinelRgbImage
- * @returns {ee.Image} Sentinel-2 中值合成 RGB 图像
- */
-function buildSentinelRgbImage() {
-  const beijingArea = getBeijingArea();
+  const normalized = bounds.map(Number);
+  if (normalized[0] >= normalized[2] || normalized[1] >= normalized[3]) {
+    throw createError('Bounds min values must be smaller than max values.', 400);
+  }
 
-  return ee
-    .ImageCollection('COPERNICUS/S2_SR_HARMONIZED')  // Sentinel-2 地表反射率harmonized 产品
-    .filterBounds(beijingArea)  // 过滤北京区域
-    .filterDate('2024-04-01', '2024-10-31')  // 生长季
-    .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 10))  // 云量 < 10%
-    .median()  // 中值复合，去除云和异常值
-    .clip(beijingArea);  // 裁剪到研究区
+  return normalized;
 }
 
-/**
- * 构建 NDVI（归一化差异植被指数）图像
- * 
- * 使用近红外波段 (B8) 和红光波段 (B4) 计算 NDVI
- * NDVI = (NIR - Red) / (NIR + Red)
- * 
- * @function buildNdviImage
- * @returns {ee.Image} NDVI 图像
- */
-function buildNdviImage() {
-  const beijingArea = getBeijingArea();
-  
-  // 获取 Sentinel-2 中值合成影像
-  const image = ee
-    .ImageCollection('COPERNICUS/S2_SR_HARMONIZED')
-    .filterBounds(beijingArea)
-    .filterDate('2024-04-01', '2024-10-31')
-    .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 10))
-    .median()
-    .clip(beijingArea);
+function walkCoordinates(coordinates, points = []) {
+  if (!Array.isArray(coordinates)) return points;
+  if (typeof coordinates[0] === 'number' && typeof coordinates[1] === 'number') {
+    points.push([Number(coordinates[0]), Number(coordinates[1])]);
+    return points;
+  }
 
-  // 计算 NDVI
-  return image.normalizedDifference(['B8', 'B4']).rename('NDVI');
+  for (const child of coordinates) walkCoordinates(child, points);
+  return points;
 }
 
-// ========== 对外导出函数 ==========
+function getGeometryBounds(geometry) {
+  const points = walkCoordinates(geometry?.coordinates);
+  if (points.length === 0) return null;
 
-/**
- * 获取图层目录
- * 
- * 返回所有可用图层的简要信息列表
- * 
- * @function getLayerCatalog
- * @returns {Promise<Array>} 图层信息数组
- */
-export async function getLayerCatalog() {
-  // 确保 GEE 已初始化
-  await ensureEarthEngineInitialized();
+  return points.reduce(
+    (acc, [lon, lat]) => [
+      Math.min(acc[0], lon),
+      Math.min(acc[1], lat),
+      Math.max(acc[2], lon),
+      Math.max(acc[3], lat),
+    ],
+    [Infinity, Infinity, -Infinity, -Infinity]
+  );
+}
+
+function intersectsBounds(featureBounds, bounds) {
+  return featureBounds[0] <= bounds[2]
+    && featureBounds[2] >= bounds[0]
+    && featureBounds[1] <= bounds[3]
+    && featureBounds[3] >= bounds[1];
+}
+
+function getFeatureCenter(feature) {
+  const featureBounds = getGeometryBounds(feature.geometry);
+  if (!featureBounds) return null;
 
   return [
-    {
-      id: 'sentinel-rgb',
-      name: 'Sentinel-2 RGB',
-      description: 'Beijing area composite from Sentinel-2 surface reflectance.',
-      dataset: 'COPERNICUS/S2_SR_HARMONIZED',
-    },
-    {
-      id: 'ndvi',
-      name: 'Sentinel-2 NDVI',
-      description: 'Beijing area NDVI derived from Sentinel-2 median composite.',
-      dataset: 'COPERNICUS/S2_SR_HARMONIZED',
-    },
+    (featureBounds[0] + featureBounds[2]) / 2,
+    (featureBounds[1] + featureBounds[3]) / 2,
   ];
 }
 
 /**
- * 根据 ID 获取图层详细信息
- * 
- * @function getLayerById
- * @param {string} layerId - 图层 ID
- * @returns {Promise<Object>} 完整的图层配置对象
- * @throws {Error} 当图层 ID 不存在时抛出 404 错误
+ * 根据经纬度范围过滤 GeoJSON FeatureCollection。
+ *
+ * @param {GeoJSON.FeatureCollection} geojson - 原始六角格数据
+ * @param {Array<number>} bounds - [minLon, minLat, maxLon, maxLat]
+ * @param {Object} options - limit 控制返回数量，避免一次返回过多 L4 要素
+ * @returns {GeoJSON.FeatureCollection} 过滤后的 GeoJSON
  */
+export function filterGeojsonByBounds(geojson, bounds, options = {}) {
+  if (!geojson || geojson.type !== 'FeatureCollection' || !Array.isArray(geojson.features)) {
+    throw createError('GeoJSON must be a FeatureCollection.', 400);
+  }
+
+  const normalizedBounds = normalizeBounds(bounds);
+  const limit = Math.min(Math.max(Number(options.limit) || 500, 1), Number(options.maxLimit) || 2000);
+  const features = [];
+
+  for (const feature of geojson.features) {
+    const featureBounds = getGeometryBounds(feature.geometry);
+    if (featureBounds && intersectsBounds(featureBounds, normalizedBounds)) {
+      features.push(feature);
+      if (features.length >= limit) break;
+    }
+  }
+
+  return {
+    type: 'FeatureCollection',
+    features,
+  };
+}
+
+/**
+ * 返回 JSON 配置中的所有数据源。
+ *
+ * @returns {Promise<Array>} 数据源目录
+ */
+export async function getDatasourceCatalog() {
+  return loadDatasourceConfig();
+}
+
+export async function getLayerCatalog() {
+  return loadDatasourceConfig();
+}
+
 export async function getLayerById(layerId) {
-  if (layerId === 'sentinel-rgb') {
-    return buildLayerPayload(
-      'Sentinel-2 RGB',
-      buildSentinelRgbImage,
-      { bands: ['B4', 'B3', 'B2'], min: 0, max: 3000, gamma: 1.1 },  // RGB 波段及拉伸参数
-      {
-        id: 'sentinel-rgb',
-        description: 'Sentinel-2 RGB median composite clipped to Beijing.',
-        dataset: 'COPERNICUS/S2_SR_HARMONIZED',
-      }
-    );
+  const dataSources = await loadDatasourceConfig();
+  const source = dataSources.find((item) => item.id === layerId);
+
+  if (!source) {
+    throw createError(`Unknown layer: ${layerId}`, 404);
   }
 
-  if (layerId === 'ndvi') {
-    return buildLayerPayload(
-      'Sentinel-2 NDVI',
-      buildNdviImage,
-      { min: 0, max: 1, palette: ['#8b0000', '#f7fcf5', '#006d2c'] },  // NDVI 色带
-      {
-        id: 'ndvi',
-        description: 'NDVI visualization derived from Sentinel-2 composite clipped to Beijing.',
-        dataset: 'COPERNICUS/S2_SR_HARMONIZED',
-      }
-    );
+  return buildLayerPayload(source);
+}
+
+/**
+ * 对六角格中心点进行 DEM 采样。
+ *
+ * 采样中心点比整面聚合更轻量，适合交互式视图刷新；返回时保持原始六角格
+ * 几何不变，只在 properties 中补充 dem 字段。
+ *
+ * @param {GeoJSON.FeatureCollection} geojson - 待采样的六角格
+ * @param {Object} options - 采样参数
+ * @returns {Promise<GeoJSON.FeatureCollection>} 带 dem 属性的 GeoJSON
+ */
+export async function sampleDemForHexagons(geojson, options = {}) {
+  if (!geojson || geojson.type !== 'FeatureCollection' || !Array.isArray(geojson.features)) {
+    throw createError('GeoJSON must be a FeatureCollection.', 400);
   }
 
-  throw createError(`Unknown layer: ${layerId}`, 404);
+  const maxFeatures = Math.min(Math.max(Number(options.maxFeatures) || 500, 1), 2000);
+  if (geojson.features.length > maxFeatures) {
+    throw createError(`Too many hexagons for one DEM sampling request. Limit is ${maxFeatures}.`, 413);
+  }
+
+  const dataSources = await loadDatasourceConfig();
+  const demSource = dataSources.find((source) => source.id === (options.datasourceId || 'dem-srtm') || source.type === 'DEM');
+  if (!demSource) {
+    throw createError('No DEM datasource is configured.', 500);
+  }
+
+  await ensureEarthEngineInitialized();
+
+  const pointFeatures = geojson.features.map((feature, index) => {
+    const center = getFeatureCenter(feature);
+    if (!center) return null;
+    return ee.Feature(ee.Geometry.Point(center), { __index: index });
+  }).filter(Boolean);
+
+  if (pointFeatures.length === 0) {
+    return { type: 'FeatureCollection', features: [] };
+  }
+
+  const samples = buildDemImage(demSource).sampleRegions({
+    collection: ee.FeatureCollection(pointFeatures),
+    scale: Number(options.scale) || 30,
+    geometries: false,
+  });
+  const info = await getEeInfo(samples, 'Failed to sample DEM values.');
+  const sampledByIndex = new Map();
+
+  for (const sample of info.features || []) {
+    const props = sample.properties || {};
+    const index = Number(props.__index);
+    const dem = props.elevation ?? props.dem ?? props.b1;
+    if (Number.isInteger(index) && dem !== undefined && dem !== null) {
+      sampledByIndex.set(index, Number(dem));
+    }
+  }
+
+  return {
+    type: 'FeatureCollection',
+    features: geojson.features.map((feature, index) => ({
+      ...feature,
+      properties: {
+        ...(feature.properties || {}),
+        dem: sampledByIndex.has(index) ? sampledByIndex.get(index) : null,
+      },
+    })),
+  };
 }

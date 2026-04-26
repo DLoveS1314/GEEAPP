@@ -50,7 +50,7 @@ export function createApp() {
    * 
    * 使服务器能够解析 Content-Type: application/json 的请求
    */
-  app.use(express.json());
+  app.use(express.json({ limit: '25mb' }));
 
   // ========== 路由配置 ==========
   
@@ -65,9 +65,11 @@ export function createApp() {
       message: 'Earth Engine backend is running.',
       endpoints: [
         '/api/health',
+        '/api/gee/datasources',
         '/api/gee/layers',
         '/api/gee/layers/sentinel-rgb',
-        '/api/gee/layers/ndvi',
+        '/api/gee/geojson/hexagons',
+        '/api/gee/dem/sample',
       ],
     });
   });
