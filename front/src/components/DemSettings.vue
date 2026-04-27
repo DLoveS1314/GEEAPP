@@ -77,8 +77,8 @@ const emit = defineEmits(['save', 'cancel'])
 
 const initialConfig = props.layer.demConfig || {
   colorRamp: 'default',
-  minDem: 0,
-  maxDem: 5000,
+  minDem: null,
+  maxDem: null,
   showContours: false,
   contourInterval: 100,
   smoothTransitions: true

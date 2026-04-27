@@ -17,6 +17,9 @@ import {
   getLayerById,
   getLayerCatalog,
   sampleDemForHexagons,
+  sampleLandcoverForHexagons,
+  getBatchCount,
+  BATCH_SIZE,
 } from '../services/geeService.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -154,7 +157,6 @@ router.post('/dem/sample', async (req, res, next) => {
 
     const hexagons = await sampleDemForHexagons(targetGeojson, {
       datasourceId: req.body?.datasourceId,
-      maxFeatures: req.body?.maxFeatures || 500,
       scale: req.body?.scale || 30,
     });
 
@@ -178,6 +180,74 @@ router.post('/dem/sample', async (req, res, next) => {
       error.message = 'L4.geojson contains invalid JSON.';
     }
 
+    next(error);
+  }
+});
+
+router.post('/dem/sample-batch', async (req, res, next) => {
+  try {
+    const { geojson, batchIndex, datasourceId, scale } = req.body || {};
+
+    if (!geojson || !Array.isArray(geojson.features)) {
+      throw createError('geojson is required.', 400);
+    }
+    if (typeof batchIndex !== 'number' || batchIndex < 0) {
+      throw createError('batchIndex is required.', 400);
+    }
+
+    const allFeatures = geojson.features;
+    const totalBatches = getBatchCount(allFeatures.length);
+    const offset = batchIndex * BATCH_SIZE;
+    const batchFeatures = allFeatures.slice(offset, offset + BATCH_SIZE);
+
+    if (batchFeatures.length === 0) {
+      return res.json({ features: [], batchIndex, totalBatches, done: true });
+    }
+
+    const batchGeojson = { type: 'FeatureCollection', features: batchFeatures };
+    const result = await sampleDemForHexagons(batchGeojson, { datasourceId, scale });
+
+    res.json({
+      features: result.features,
+      batchIndex,
+      totalBatches,
+      done: batchIndex + 1 >= totalBatches,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/landcover/sample-batch', async (req, res, next) => {
+  try {
+    const { geojson, batchIndex, datasourceId } = req.body || {};
+
+    if (!geojson || !Array.isArray(geojson.features)) {
+      throw createError('geojson is required.', 400);
+    }
+    if (typeof batchIndex !== 'number' || batchIndex < 0) {
+      throw createError('batchIndex is required.', 400);
+    }
+
+    const allFeatures = geojson.features;
+    const totalBatches = getBatchCount(allFeatures.length);
+    const offset = batchIndex * BATCH_SIZE;
+    const batchFeatures = allFeatures.slice(offset, offset + BATCH_SIZE);
+
+    if (batchFeatures.length === 0) {
+      return res.json({ features: [], batchIndex, totalBatches, done: true });
+    }
+
+    const batchGeojson = { type: 'FeatureCollection', features: batchFeatures };
+    const result = await sampleLandcoverForHexagons(batchGeojson, { datasourceId });
+
+    res.json({
+      features: result.features,
+      batchIndex,
+      totalBatches,
+      done: batchIndex + 1 >= totalBatches,
+    });
+  } catch (error) {
     next(error);
   }
 });

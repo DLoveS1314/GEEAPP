@@ -16,6 +16,7 @@ import express from 'express';
 import cors from 'cors';
 import healthRouter from './routes/health.js';
 import geeRouter from './routes/gee.js';
+import fsRouter from './routes/fs.js';
 
 // 获取当前文件的绝对路径（ES Module 中替代 __dirname）
 const __filename = fileURLToPath(import.meta.url);
@@ -79,6 +80,9 @@ export function createApp() {
   
   // 挂载 Google Earth Engine 相关路由
   app.use('/api/gee', geeRouter);
+
+  // 挂载文件系统浏览路由
+  app.use('/api/fs', fsRouter);
 
   // ========== 错误处理 ==========
   

@@ -22,9 +22,11 @@
         <button type="button" @click="reloadLayer" :disabled="isBusy || !selectedDatasourceId">
           重新加载图层
         </button>
-        <button type="button" @click="loadHexagons" :disabled="isBusy">
-          加载六角格
-        </button>
+        <FilePickerDialog 
+          label="加载六角格" 
+          title="选择 GeoJSON 六角格文件"
+          @file-selected="handleFileSelected"
+        />
         <button type="button" @click="sampleDem(false)" :disabled="isBusy">
           采样 DEM
         </button>
@@ -65,6 +67,10 @@
 
     <main class="map-wrap">
       <div ref="mapRef" id="map" aria-label="Map"></div>
+      <div class="coord-display">
+        <span>经度: {{ mouseCoord.lon }}</span>
+        <span>纬度: {{ mouseCoord.lat }}</span>
+      </div>
     </main>
 
     <div v-if="showDemSettings" class="modal-overlay" @click="showDemSettings = false">
@@ -89,6 +95,7 @@ import { fetchDataSources, fetchHexagonGeojson, fetchLayer, sampleDem as request
 import { useMap } from './useMap.js'
 import LayerPanel from './components/LayerPanel.vue'
 import DemSettings from './components/DemSettings.vue'
+import FilePickerDialog from './components/FilePickerDialog.vue'
 
 const mapRef = ref(null)
 const selectedDatasourceId = ref('')
@@ -105,8 +112,8 @@ const rawDataVisible = ref(false)
 const isBusy = ref(false)
 const demConfig = ref({
   colorRamp: 'default',
-  minDem: 0,
-  maxDem: 5000,
+  minDem: null,
+  maxDem: null,
   showContours: false,
   contourInterval: 100,
   smoothTransitions: true
@@ -120,7 +127,9 @@ const {
   updateLayerVisibility,
   updateLayerDemStyle,
   setRawDataStyle,
-  getViewBounds
+  getViewBounds,
+  mouseCoord,
+  selectedFeatureInfo
 } = useMap()
 
 const currentDatasource = computed(() => {
@@ -186,18 +195,32 @@ async function reloadLayer() {
   await loadLayer()
 }
 
-async function loadHexagons() {
+async function loadHexagons(filePath = null) {
   isBusy.value = true
-  setStatus('正在按当前视图加载 L4 六角格...')
+  setStatus(filePath ? '正在加载本地文件...' : '正在按当前视图加载 L4 六角格...')
 
   try {
-    const bounds = requireViewBounds()
-    const geojson = await fetchHexagonGeojson({ bounds, limit: 500 })
+    let geojson
+    if (filePath) {
+      const response = await fetch('/api/fs/read-geojson', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: filePath })
+      })
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({}))
+        throw new Error(err.error || '读取文件失败')
+      }
+      geojson = await response.json()
+    } else {
+      const bounds = requireViewBounds()
+      geojson = await fetchHexagonGeojson({ bounds, limit: 500 })
+    }
     hexagonGeojson.value = geojson
     demGeojson.value = null
     rawDataVisible.value = true
     setRawHexagons(geojson, { fit: false })
-    setStatus(`已加载当前视图 L4 六角格 ${geojson.features?.length || 0} 个`)
+    setStatus(`已加载六角格 ${geojson.features?.length || 0} 个`)
     updateMapLayers()
   } catch (error) {
     setStatus(error.message, true)
@@ -206,18 +229,76 @@ async function loadHexagons() {
   }
 }
 
+function handleFileSelected(filePath) {
+  loadHexagons(filePath)
+}
+
 async function sampleDem(save = false) {
   isBusy.value = true
+  const geojson = hexagonGeojson.value
+
+  if (geojson?.features?.length > 500) {
+    setStatus(save ? '正在批量采样 DEM（分批次）...' : '正在批量采样 DEM（分批次）...')
+    try {
+      const totalFeatures = geojson.features.length
+      const totalBatches = Math.ceil(totalFeatures / 500)
+      const sampledFeatures = new Array(totalFeatures).fill(null)
+
+      for (let i = 0; i < totalBatches; i++) {
+        setStatus(`正在采样 DEM: 批次 ${i + 1}/${totalBatches}...`)
+        const response = await fetch('/api/gee/dem/sample-batch', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            geojson,
+            batchIndex: i,
+            datasourceId: 'dem-srtm',
+            scale: 30
+          })
+        })
+        if (!response.ok) {
+          const err = await response.json().catch(() => ({}))
+          throw new Error(err.error || `批次 ${i + 1} 采样失败`)
+        }
+        const result = await response.json()
+        const offset = i * 500
+        for (let j = 0; j < result.features.length; j++) {
+          sampledFeatures[offset + j] = result.features[j]
+        }
+
+        const partialGeojson = {
+          type: 'FeatureCollection',
+          features: sampledFeatures.filter(Boolean)
+        }
+        demGeojson.value = partialGeojson
+        rawDataVisible.value = false
+        updateDemConfigFromFeatures(partialGeojson.features)
+        setDemHexagons(partialGeojson, demConfig.value, { fit: false })
+        updateMapLayers()
+      }
+
+      const allFiltered = sampledFeatures.filter(Boolean)
+      setStatus(`DEM 采样完成，共 ${allFiltered.length} 个六角格`)
+    } catch (error) {
+      setStatus(`采样失败：${error.message}`, true)
+    } finally {
+      isBusy.value = false
+    }
+    return
+  }
+
   setStatus(save ? '正在采样并保存 DEM 数据...' : '正在采样 DEM 数据...')
 
   try {
-    const payload = hexagonGeojson.value
-      ? { geojson: hexagonGeojson.value, save, datasourceId: 'dem-srtm', maxFeatures: 500 }
-      : { bounds: requireViewBounds(), save, datasourceId: 'dem-srtm', limit: 500, maxFeatures: 500 }
+    const count = geojson?.features?.length || 0
+    const payload = geojson
+      ? { geojson, save, datasourceId: 'dem-srtm', scale: 30 }
+      : { bounds: requireViewBounds(), save, datasourceId: 'dem-srtm', limit: 500, scale: 30 }
     const result = await requestSampleDem(payload)
 
     demGeojson.value = result.hexagons
     rawDataVisible.value = false
+    updateDemConfigFromFeatures(result.hexagons.features)
     setDemHexagons(result.hexagons, demConfig.value, { fit: false })
 
     const savedMessage = result.savedPath ? `，已保存到 ${result.savedPath}` : ''
@@ -290,6 +371,21 @@ function saveDemSettings(config) {
   updateLayerDemStyle(config)
   updateMapLayers()
   showDemSettings.value = false
+}
+
+function updateDemConfigFromFeatures(features) {
+  let min = Infinity
+  let max = -Infinity
+  for (const f of features) {
+    const dem = Number(f.properties?.dem ?? f.get?.('dem'))
+    if (Number.isFinite(dem)) {
+      if (dem < min) min = dem
+      if (dem > max) max = dem
+    }
+  }
+  if (Number.isFinite(min)) {
+    demConfig.value = { ...demConfig.value, minDem: min, maxDem: max }
+  }
 }
 
 function handleExportLayer(layerId) {
@@ -410,5 +506,31 @@ onMounted(() => {
   font-size: 12px;
   color: #d7e4ff;
   border: 1px solid rgba(160, 191, 255, 0.14);
+}
+
+.coord-display {
+  position: absolute;
+  top: 32px;
+  right: 32px;
+  background: rgba(9, 17, 31, 0.82);
+  border: 1px solid rgba(160, 191, 255, 0.2);
+  border-radius: 10px;
+  padding: 8px 16px;
+  display: flex;
+  gap: 16px;
+  font-size: 13px;
+  color: #d7e4ff;
+  font-family: 'Courier New', monospace;
+  pointer-events: none;
+  z-index: 10;
+  backdrop-filter: blur(8px);
+}
+
+.coord-display span {
+  white-space: nowrap;
+}
+
+.map-wrap {
+  position: relative;
 }
 </style>

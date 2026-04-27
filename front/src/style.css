@@ -132,6 +132,49 @@ button:hover {
   margin-bottom: 10px;
 }
 
+.ol-popup {
+  position: absolute;
+  background: #0f1a30;
+  border: 1px solid rgba(160, 191, 255, 0.3);
+  border-radius: 10px;
+  padding: 10px 14px;
+  min-width: 180px;
+  max-width: 320px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  pointer-events: none;
+}
+
+.ol-popup:after {
+  content: '';
+  position: absolute;
+  bottom: -8px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 0;
+  height: 0;
+  border-left: 8px solid transparent;
+  border-right: 8px solid transparent;
+  border-top: 8px solid #0f1a30;
+}
+
+.popup-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.popup-table td {
+  padding: 3px 6px;
+  color: #d7e4ff;
+}
+
+.popup-table td:first-child {
+  color: #8ba7e8;
+  font-weight: 600;
+  white-space: nowrap;
+  padding-right: 12px;
+}
+
 @media (max-width: 960px) {
   .app-shell {
     grid-template-columns: 1fr;

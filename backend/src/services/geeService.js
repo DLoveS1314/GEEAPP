@@ -143,6 +143,10 @@ function buildDemImage(source) {
   return ee.Image(source.dataset).select('elevation');
 }
 
+function buildLandcoverSamplingImage(source) {
+  return ee.ImageCollection(source.dataset).first().select('Map');
+}
+
 function buildImageFactory(source) {
   if (source.type === 'RGB') return () => buildSentinelRgbImage(source);
   if (source.type === 'LANDCOVER') return () => buildLandcoverImage(source);
@@ -299,14 +303,11 @@ export async function getLayerById(layerId) {
  * @param {Object} options - 采样参数
  * @returns {Promise<GeoJSON.FeatureCollection>} 带 dem 属性的 GeoJSON
  */
+const BATCH_SIZE = 500;
+
 export async function sampleDemForHexagons(geojson, options = {}) {
   if (!geojson || geojson.type !== 'FeatureCollection' || !Array.isArray(geojson.features)) {
     throw createError('GeoJSON must be a FeatureCollection.', 400);
-  }
-
-  const maxFeatures = Math.min(Math.max(Number(options.maxFeatures) || 500, 1), 2000);
-  if (geojson.features.length > maxFeatures) {
-    throw createError(`Too many hexagons for one DEM sampling request. Limit is ${maxFeatures}.`, 413);
   }
 
   const dataSources = await loadDatasourceConfig();
@@ -317,36 +318,40 @@ export async function sampleDemForHexagons(geojson, options = {}) {
 
   await ensureEarthEngineInitialized();
 
-  const pointFeatures = geojson.features.map((feature, index) => {
-    const center = getFeatureCenter(feature);
-    if (!center) return null;
-    return ee.Feature(ee.Geometry.Point(center), { __index: index });
-  }).filter(Boolean);
-
-  if (pointFeatures.length === 0) {
-    return { type: 'FeatureCollection', features: [] };
-  }
-
-  const samples = buildDemImage(demSource).sampleRegions({
-    collection: ee.FeatureCollection(pointFeatures),
-    scale: Number(options.scale) || 30,
-    geometries: false,
-  });
-  const info = await getEeInfo(samples, 'Failed to sample DEM values.');
+  const allFeatures = geojson.features;
+  const totalFeatures = allFeatures.length;
   const sampledByIndex = new Map();
 
-  for (const sample of info.features || []) {
-    const props = sample.properties || {};
-    const index = Number(props.__index);
-    const dem = props.elevation ?? props.dem ?? props.b1;
-    if (Number.isInteger(index) && dem !== undefined && dem !== null) {
-      sampledByIndex.set(index, Number(dem));
+  for (let offset = 0; offset < totalFeatures; offset += BATCH_SIZE) {
+    const batch = allFeatures.slice(offset, offset + BATCH_SIZE);
+    const pointFeatures = batch.map((feature, localIndex) => {
+      const center = getFeatureCenter(feature);
+      if (!center) return null;
+      return ee.Feature(ee.Geometry.Point(center), { __index: offset + localIndex });
+    }).filter(Boolean);
+
+    if (pointFeatures.length === 0) continue;
+
+    const samples = buildDemImage(demSource).sampleRegions({
+      collection: ee.FeatureCollection(pointFeatures),
+      scale: Number(options.scale) || 30,
+      geometries: false,
+    });
+    const info = await getEeInfo(samples, 'Failed to sample DEM values at offset ' + offset);
+
+    for (const sample of info.features || []) {
+      const props = sample.properties || {};
+      const index = Number(props.__index);
+      const dem = props.elevation ?? props.dem ?? props.b1;
+      if (Number.isInteger(index) && dem !== undefined && dem !== null) {
+        sampledByIndex.set(index, Number(dem));
+      }
     }
   }
 
   return {
     type: 'FeatureCollection',
-    features: geojson.features.map((feature, index) => ({
+    features: allFeatures.map((feature, index) => ({
       ...feature,
       properties: {
         ...(feature.properties || {}),
@@ -355,3 +360,65 @@ export async function sampleDemForHexagons(geojson, options = {}) {
     })),
   };
 }
+
+export async function sampleLandcoverForHexagons(geojson, options = {}) {
+  if (!geojson || geojson.type !== 'FeatureCollection' || !Array.isArray(geojson.features)) {
+    throw createError('GeoJSON must be a FeatureCollection.', 400);
+  }
+
+  const dataSources = await loadDatasourceConfig();
+  const lcSource = dataSources.find((source) => source.id === (options.datasourceId || 'landcover') || source.type === 'LANDCOVER');
+  if (!lcSource) {
+    throw createError('No LANDCOVER datasource is configured.', 500);
+  }
+
+  await ensureEarthEngineInitialized();
+
+  const allFeatures = geojson.features;
+  const totalFeatures = allFeatures.length;
+  const sampledByIndex = new Map();
+
+  for (let offset = 0; offset < totalFeatures; offset += BATCH_SIZE) {
+    const batch = allFeatures.slice(offset, offset + BATCH_SIZE);
+    const pointFeatures = batch.map((feature, localIndex) => {
+      const center = getFeatureCenter(feature);
+      if (!center) return null;
+      return ee.Feature(ee.Geometry.Point(center), { __index: offset + localIndex });
+    }).filter(Boolean);
+
+    if (pointFeatures.length === 0) continue;
+
+    const samples = buildLandcoverSamplingImage(lcSource).sampleRegions({
+      collection: ee.FeatureCollection(pointFeatures),
+      scale: 10,
+      geometries: false,
+    });
+    const info = await getEeInfo(samples, 'Failed to sample landcover values at offset ' + offset);
+
+    for (const sample of info.features || []) {
+      const props = sample.properties || {};
+      const index = Number(props.__index);
+      const lc = props.Map ?? props.landcover ?? props.b1;
+      if (Number.isInteger(index) && lc !== undefined && lc !== null) {
+        sampledByIndex.set(index, Number(lc));
+      }
+    }
+  }
+
+  return {
+    type: 'FeatureCollection',
+    features: allFeatures.map((feature, index) => ({
+      ...feature,
+      properties: {
+        ...(feature.properties || {}),
+        landcover: sampledByIndex.has(index) ? sampledByIndex.get(index) : null,
+      },
+    })),
+  };
+}
+
+export function getBatchCount(featureCount) {
+  return Math.ceil(featureCount / BATCH_SIZE);
+}
+
+export { BATCH_SIZE };
