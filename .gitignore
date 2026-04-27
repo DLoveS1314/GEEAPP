@@ -14,3 +14,5 @@ dist/
 .kilo/run-script.ps1
 .kilo/rules/project.md
 outputJsonDem/dem-hexagons-1777301028352.json
+.gitignore
+.kilocode/rules/project.md

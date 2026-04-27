@@ -116,3 +116,6 @@ GEE_PROXY_INSECURE=1
 cd backend
 npm run dev
 ```
+TODO
+把地表覆盖采样和dem采样组合在一起
+添加矢量数据
