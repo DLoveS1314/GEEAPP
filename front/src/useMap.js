@@ -10,6 +10,34 @@ import { fromLonLat, transformExtent, toLonLat } from 'ol/proj.js'
 import { Fill, Stroke, Style, Text } from 'ol/style.js'
 import Overlay from 'ol/Overlay.js'
 
+const LANDCOVER_LABELS = {
+  10: '林地',
+  20: '灌木',
+  30: '草地',
+  40: '耕地',
+  50: '建设用地',
+  60: '裸地',
+  70: '冰雪',
+  80: '水体',
+  90: '草本湿地',
+  95: '红树林',
+  100: '苔藓地衣'
+}
+
+const LANDCOVER_COLORS = {
+  10: 'rgba(0, 100, 0, 0.7)',
+  20: 'rgba(255, 187, 34, 0.7)',
+  30: 'rgba(255, 255, 76, 0.7)',
+  40: 'rgba(240, 150, 255, 0.7)',
+  50: 'rgba(250, 0, 0, 0.7)',
+  60: 'rgba(180, 180, 180, 0.7)',
+  70: 'rgba(240, 240, 240, 0.7)',
+  80: 'rgba(0, 100, 200, 0.7)',
+  90: 'rgba(0, 150, 160, 0.7)',
+  95: 'rgba(0, 207, 117, 0.7)',
+  100: 'rgba(250, 230, 160, 0.7)'
+}
+
 let map = null
 let geeLayer = null
 let demHexLayer = null
@@ -138,6 +166,34 @@ function createRawHexagonStyle() {
   })
 }
 
+function createLandcoverStyle() {
+  return function(feature) {
+    const landcover = Number(feature.get('landcover'))
+    const label = LANDCOVER_LABELS[landcover] || ''
+
+    return new Style({
+      fill: new Fill({
+        color: LANDCOVER_COLORS[landcover] || 'rgba(120, 120, 120, 0.35)',
+      }),
+      stroke: new Stroke({
+        color: 'rgba(20, 24, 35, 0.85)',
+        width: 1,
+      }),
+      text: new Text({
+        text: label,
+        font: '10px Inter, Segoe UI, sans-serif',
+        fill: new Fill({
+          color: 'rgba(255, 255, 255, 0.95)',
+        }),
+        stroke: new Stroke({
+          color: 'rgba(0, 0, 0, 0.8)',
+          width: 2,
+        }),
+      }),
+    })
+  }
+}
+
 function createHighlightStyle() {
   return new Style({
     fill: new Fill({
@@ -236,6 +292,8 @@ export function useMap() {
           const val = Number.isFinite(value) ? Number(value).toLocaleString() : String(value ?? '')
           if (key === 'dem' && val) {
             html += `<tr><td>高程 (DEM)</td><td>${val}m</td></tr>`
+          } else if (key === 'landcover' && val) {
+            html += `<tr><td>地表覆盖</td><td>${LANDCOVER_LABELS[Number(value)] || val} (${val})</td></tr>`
           } else if (val) {
             html += `<tr><td>${key}</td><td>${val}</td></tr>`
           }
@@ -337,6 +395,31 @@ export function useMap() {
     popupOverlay.setPosition(undefined)
   }
 
+  function setLandcoverHexagons(geojson, options = {}) {
+    if (!demHexLayer || !map) return
+
+    const source = new VectorSource({
+      features: new GeoJSON().readFeatures(geojson, {
+        featureProjection: 'EPSG:3857',
+      }),
+    })
+
+    demHexLayer.setSource(source)
+    demHexLayer.setStyle(createLandcoverStyle())
+
+    if (options.fit !== false && source.getFeatures().length > 0) {
+      map.getView().fit(source.getExtent(), {
+        padding: [60, 60, 60, 60],
+        duration: 500,
+        maxZoom: 12,
+      })
+    }
+
+    highlightLayer.getSource().clear()
+    selectedFeature = null
+    popupOverlay.setPosition(undefined)
+  }
+
   function addLayer(layer) {
     if (!map) return
     map.addLayer(layer)
@@ -385,6 +468,7 @@ export function useMap() {
     setGeeLayer,
     setDemHexagons,
     setRawHexagons,
+    setLandcoverHexagons,
     addLayer,
     removeLayer,
     updateLayerVisibility,

@@ -10,3 +10,7 @@ dist/
 /front/.env
 
 /.DS_Store
+.kilo/agent-manager.json
+.kilo/run-script.ps1
+.kilo/rules/project.md
+outputJsonDem/dem-hexagons-1777301028352.json

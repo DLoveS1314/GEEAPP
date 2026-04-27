@@ -33,6 +33,9 @@
         <button type="button" @click="sampleDem(true)" :disabled="isBusy">
           采样并保存
         </button>
+        <button type="button" @click="sampleLandcover" :disabled="isBusy || !hexagonGeojson">
+          采样地表覆盖
+        </button>
         <button type="button" @click="toggleRawData" :disabled="!hexagonGeojson && !demGeojson" :class="{ active: rawDataVisible }">
           {{ rawDataVisible ? '显示 DEM 渲染' : '显示原始六角格' }}
         </button>
@@ -105,6 +108,7 @@ const statusMessage = ref('正在初始化...')
 const statusError = ref(false)
 const hexagonGeojson = ref(null)
 const demGeojson = ref(null)
+const landcoverGeojson = ref(null)
 const showDemSettings = ref(false)
 const activeLayer = ref(null)
 const mapLayers = ref([])
@@ -124,6 +128,7 @@ const {
   setGeeLayer,
   setDemHexagons,
   setRawHexagons,
+  setLandcoverHexagons,
   updateLayerVisibility,
   updateLayerDemStyle,
   setRawDataStyle,
@@ -218,6 +223,7 @@ async function loadHexagons(filePath = null) {
     }
     hexagonGeojson.value = geojson
     demGeojson.value = null
+    landcoverGeojson.value = null
     rawDataVisible.value = true
     setRawHexagons(geojson, { fit: false })
     setStatus(`已加载六角格 ${geojson.features?.length || 0} 个`)
@@ -236,6 +242,7 @@ function handleFileSelected(filePath) {
 async function sampleDem(save = false) {
   isBusy.value = true
   const geojson = hexagonGeojson.value
+  landcoverGeojson.value = null
 
   if (geojson?.features?.length > 500) {
     setStatus(save ? '正在批量采样 DEM（分批次）...' : '正在批量采样 DEM（分批次）...')
@@ -311,6 +318,61 @@ async function sampleDem(save = false) {
   }
 }
 
+async function sampleLandcover() {
+  if (!hexagonGeojson.value) {
+    setStatus('请先加载六角格', true)
+    return
+  }
+
+  isBusy.value = true
+  const geojson = hexagonGeojson.value
+  const totalFeatures = geojson.features?.length || 0
+  const totalBatches = Math.ceil(totalFeatures / 500)
+  const sampledFeatures = new Array(totalFeatures).fill(null)
+
+  try {
+    for (let i = 0; i < totalBatches; i++) {
+      setStatus(`正在采样地表覆盖: 批次 ${i + 1}/${totalBatches}...`)
+      const response = await fetch('/api/gee/landcover/sample-batch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          geojson,
+          batchIndex: i,
+          datasourceId: 'landcover'
+        })
+      })
+
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({}))
+        throw new Error(err.error || `批次 ${i + 1} 地表覆盖采样失败`)
+      }
+
+      const result = await response.json()
+      const offset = i * 500
+      for (let j = 0; j < result.features.length; j++) {
+        sampledFeatures[offset + j] = result.features[j]
+      }
+
+      const partialGeojson = {
+        type: 'FeatureCollection',
+        features: sampledFeatures.filter(Boolean)
+      }
+      landcoverGeojson.value = partialGeojson
+      demGeojson.value = null
+      rawDataVisible.value = false
+      setLandcoverHexagons(partialGeojson, { fit: false })
+      updateMapLayers()
+    }
+
+    setStatus(`地表覆盖采样完成，共 ${sampledFeatures.filter(Boolean).length} 个六角格`)
+  } catch (error) {
+    setStatus(`地表覆盖采样失败：${error.message}`, true)
+  } finally {
+    isBusy.value = false
+  }
+}
+
 function toggleRawData() {
   if (rawDataVisible.value && demGeojson.value) {
     setDemHexagons(demGeojson.value, demConfig.value, { fit: false })
@@ -344,8 +406,8 @@ function updateMapLayers() {
     },
     {
       id: 'dem',
-      name: demGeojson.value ? 'DEM 采样六角格' : 'L4 六角格',
-      type: 'dem',
+      name: landcoverGeojson.value ? '地表覆盖采样六角格' : (demGeojson.value ? 'DEM 采样六角格' : 'L4 六角格'),
+      type: landcoverGeojson.value ? 'landcover' : 'dem',
       visible: true,
       hasDemSettings: Boolean(demGeojson.value),
       demConfig: demConfig.value
