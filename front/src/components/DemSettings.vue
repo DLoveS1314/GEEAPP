@@ -1,64 +1,72 @@
 <template>
-  <div class="dem-settings">
-    <div class="form-group">
-      <label for="colorRamp">颜色渐变方案</label>
-      <select id="colorRamp" v-model="settings.colorRamp">
-        <option value="default">默认 (蓝 - 黄 - 红)</option>
-        <option value="terrain">地形 (绿 - 棕 - 白)</option>
-        <option value="spectral">光谱 (彩虹色)</option>
-      </select>
-      <div class="color-preview">
+  <div class="modal-body">
+    <div class="settings-grid">
+      <!-- Color ramp selector -->
+      <div class="field">
+        <span class="field-label">颜色渐变</span>
+        <select id="colorRamp" v-model="settings.colorRamp">
+          <option value="default">蓝 — 黄 — 红</option>
+          <option value="terrain">地形 (绿 — 棕 — 白)</option>
+          <option value="spectral">光谱 (彩虹)</option>
+        </select>
         <div class="preview-bar" :style="previewStyle"></div>
+      </div>
+
+      <!-- Elevation range -->
+      <div class="field-row">
+        <div class="field">
+          <span class="field-label">最小高程</span>
+          <input 
+            type="number" 
+            v-model.number="settings.minDem"
+            @input="validateRange"
+          />
+        </div>
+        <div class="field">
+          <span class="field-label">最大高程</span>
+          <input 
+            type="number" 
+            v-model.number="settings.maxDem"
+            @input="validateRange"
+          />
+        </div>
+      </div>
+
+      <!-- Contours -->
+      <div class="field">
+        <label class="checkbox-label">
+          <input type="checkbox" v-model="settings.showContours" />
+          <span class="checkbox-track">
+            <span class="checkbox-thumb"></span>
+          </span>
+          显示等高线
+        </label>
+      </div>
+
+      <div v-if="settings.showContours" class="field">
+        <span class="field-label">等高线间距 (米)</span>
+        <input 
+          type="number" 
+          v-model.number="settings.contourInterval"
+          min="1"
+        />
+      </div>
+
+      <!-- Smooth transitions -->
+      <div class="field">
+        <label class="checkbox-label">
+          <input type="checkbox" v-model="settings.smoothTransitions" />
+          <span class="checkbox-track">
+            <span class="checkbox-thumb"></span>
+          </span>
+          平滑过渡
+        </label>
       </div>
     </div>
 
-    <div class="form-group">
-      <label for="minDem">最小高程 (米)</label>
-      <input 
-        id="minDem"
-        type="number" 
-        v-model.number="settings.minDem"
-        @input="validateRange"
-      />
-    </div>
-
-    <div class="form-group">
-      <label for="maxDem">最大高程 (米)</label>
-      <input 
-        id="maxDem"
-        type="number" 
-        v-model.number="settings.maxDem"
-        @input="validateRange"
-      />
-    </div>
-
-    <div class="form-group">
-      <label>
-        <input type="checkbox" v-model="settings.showContours" />
-        显示等高线
-      </label>
-    </div>
-
-    <div class="form-group" v-if="settings.showContours">
-      <label for="contourInterval">等高线间距 (米)</label>
-      <input 
-        id="contourInterval"
-        type="number" 
-        v-model.number="settings.contourInterval"
-        min="1"
-      />
-    </div>
-
-    <div class="form-group">
-      <label>
-        <input type="checkbox" v-model="settings.smoothTransitions" />
-        平滑过渡
-      </label>
-    </div>
-
     <div class="actions">
-      <button type="button" class="btn-cancel" @click="$emit('cancel')">取消</button>
-      <button type="button" class="btn-save" @click="handleSave">保存</button>
+      <button class="btn btn-full" @click="$emit('cancel')">取消</button>
+      <button class="btn btn-primary btn-full" @click="handleSave">保存</button>
     </div>
   </div>
 </template>
@@ -131,97 +139,117 @@ function validateRange() {
 }
 
 function handleSave() {
-  emit('save', {
-    ...settings.value
-  })
+  emit('save', { ...settings.value })
 }
 </script>
 
 <style scoped>
-.dem-settings {
+.modal-body {
+  padding: 24px;
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 24px;
 }
 
-.form-group {
+.settings-grid {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 18px;
 }
 
-.form-group label {
-  font-size: 14px;
-  color: #8ba7e8;
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
-.form-group input[type="number"],
-.form-group select {
-  background: rgba(9, 17, 31, 0.8);
-  border: 1px solid rgba(160, 191, 255, 0.2);
-  border-radius: 8px;
+.field-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+}
+
+.field select,
+.field input[type="number"] {
+  background: rgba(7, 11, 20, 0.6);
+  border: 1px solid var(--border-mid);
+  border-radius: var(--radius-sm);
   padding: 10px 12px;
-  color: #eff4ff;
-  font-size: 14px;
+  color: var(--text-primary);
+  font-size: 13px;
 }
 
-.form-group input[type="checkbox"] {
-  margin-right: 8px;
+.field select:focus,
+.field input:focus {
+  outline: none;
+  border-color: var(--accent-blue);
+  box-shadow: 0 0 0 3px rgba(75, 139, 255, 0.15);
 }
 
-.form-group label:has(input[type="checkbox"]) {
-  display: flex;
-  align-items: center;
-  color: #eff4ff;
-  cursor: pointer;
-}
-
-.color-preview {
-  margin-top: 8px;
+.field-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
 }
 
 .preview-bar {
-  height: 30px;
+  height: 28px;
   border-radius: 6px;
-  border: 1px solid rgba(160, 191, 255, 0.2);
+  border: 1px solid var(--border-subtle);
+  margin-top: 4px;
+}
+
+.checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text-primary);
+  user-select: none;
+}
+
+.checkbox-label input {
+  display: none;
+}
+
+.checkbox-track {
+  width: 36px;
+  height: 20px;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  position: relative;
+  transition: background 0.2s;
+  flex-shrink: 0;
+}
+
+.checkbox-label input:checked + .checkbox-track {
+  background: var(--accent-blue);
+}
+
+.checkbox-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  background: #fff;
+  border-radius: 50%;
+  transition: transform 0.2s;
+}
+
+.checkbox-label input:checked + .checkbox-track .checkbox-thumb {
+  transform: translateX(16px);
 }
 
 .actions {
-  display: flex;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
   gap: 12px;
-  margin-top: 10px;
   padding-top: 20px;
-  border-top: 1px solid rgba(160, 191, 255, 0.14);
-}
-
-.actions button {
-  flex: 1;
-  padding: 12px 20px;
-  border-radius: 10px;
-  font-size: 14px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.btn-cancel {
-  background: rgba(139, 167, 232, 0.15);
-  border: 1px solid rgba(139, 167, 232, 0.3);
-  color: #8ba7e8;
-}
-
-.btn-cancel:hover {
-  background: rgba(139, 167, 232, 0.25);
-}
-
-.btn-save {
-  background: linear-gradient(135deg, #3b82f6, #22c55e);
-  border: none;
-  color: #03101d;
-}
-
-.btn-save:hover {
-  opacity: 0.9;
-  transform: translateY(-1px);
+  border-top: 1px solid var(--border-subtle);
 }
 </style>

@@ -1,64 +1,60 @@
 <template>
   <div class="app-shell">
     <aside class="sidebar">
+      <!-- Header -->
       <div class="sidebar-header">
         <p class="eyebrow">Google Earth Engine</p>
-        <h1>Vue + OpenLayers</h1>
+        <h1>HexGrid<br/>Explorer</h1>
         <p class="summary">
-          前端通过本地 Node.js 服务请求 Earth Engine 图层信息，再以 OpenLayers XYZ 图层方式加载。
+          六角格地理空间分析与可视化工作台
         </p>
       </div>
 
-      <div class="controls">
-        <label class="field" for="datasourceSelect">
-          <span>GEE 数据源</span>
-          <select id="datasourceSelect" v-model="selectedDatasourceId" @change="loadLayer">
-            <option v-for="source in availableDataSources" :key="source.id" :value="source.id">
-              {{ source.name }}
-            </option>
-          </select>
-        </label>
-
-        <button type="button" @click="reloadLayer" :disabled="isBusy || !selectedDatasourceId">
-          重新加载图层
-        </button>
-        <FilePickerDialog 
-          label="加载六角格" 
-          title="选择 GeoJSON 六角格文件"
-          @file-selected="handleFileSelected"
-        />
-        <button type="button" @click="sampleDem(false)" :disabled="isBusy">
-          采样 DEM
-        </button>
-        <button type="button" @click="sampleDem(true)" :disabled="isBusy">
-          采样并保存
-        </button>
-        <button type="button" @click="sampleLandcover" :disabled="isBusy || !hexagonGeojson">
-          采样地表覆盖
-        </button>
-        <button type="button" @click="toggleRawData" :disabled="!hexagonGeojson && !demGeojson" :class="{ active: rawDataVisible }">
-          {{ rawDataVisible ? '显示 DEM 渲染' : '显示原始六角格' }}
-        </button>
+      <!-- Controls -->
+      <div class="card">
+        <p class="card-title">数据源</p>
+        <div class="controls-grid">
+          <div>
+            <span class="field-label">GEE 图层</span>
+            <select id="datasourceSelect" v-model="selectedDatasourceId" @change="loadLayer">
+              <option v-for="source in availableDataSources" :key="source.id" :value="source.id">
+                {{ source.name }}
+              </option>
+            </select>
+          </div>
+          <button class="btn btn-primary btn-full" @click="reloadLayer" :disabled="isBusy || !selectedDatasourceId">
+            加载图层
+          </button>
+        </div>
       </div>
 
-      <div class="meta" v-if="currentDatasource || currentLayer">
-        <dt>名称</dt>
-        <dd>{{ currentDatasource?.name || currentLayer?.name || '-' }}</dd>
-        <dt>类型</dt>
-        <dd>{{ currentDatasource?.type || currentLayer?.datasourceType || '-' }}</dd>
-        <dt>数据集</dt>
-        <dd>{{ currentDatasource?.dataset || currentLayer?.dataset || '-' }}</dd>
-        <dt>Project</dt>
-        <dd>{{ currentLayer?.projectId || '-' }}</dd>
-        <dt>说明</dt>
-        <dd>{{ currentDatasource?.description || currentLayer?.description || '-' }}</dd>
+      <!-- Hexagon actions -->
+      <div class="card">
+        <p class="card-title">六角格操作</p>
+        <div class="controls-grid">
+          <FilePickerDialog 
+            label="加载六角格" 
+            title="选择 GeoJSON 六角格文件"
+            @file-selected="handleFileSelected"
+          />
+          <button class="btn btn-full" @click="sampleDem" :disabled="isBusy">
+            采样 DEM
+          </button>
+          <button class="btn btn-full" @click="sampleLandcover" :disabled="isBusy || !hexagonGeojson">
+            采样地表覆盖
+          </button>
+          <button 
+            class="btn btn-full"
+            :class="{ 'btn-accent': rawDataVisible }"
+            @click="toggleRawData" 
+            :disabled="!hexagonGeojson && !demGeojson"
+          >
+            {{ rawDataVisible ? '显示 DEM 渲染' : '显示原始六角格' }}
+          </button>
+        </div>
       </div>
 
-      <div class="status-panel">
-        <strong>状态</strong>
-        <p :class="{ error: statusError }">{{ statusMessage }}</p>
-      </div>
-
+      <!-- Layer panel -->
       <LayerPanel 
         v-if="currentLayer"
         :layers="mapLayers"
@@ -66,20 +62,43 @@
         @dem-settings="handleDemSettings"
         @export-layer="handleExportLayer"
       />
+
+      <!-- Metadata -->
+      <div v-if="currentDatasource || currentLayer" class="card">
+        <p class="card-title">图层信息</p>
+        <dl class="meta-grid">
+          <dt>名称</dt>
+          <dd>{{ currentDatasource?.name || currentLayer?.name || '-' }}</dd>
+          <dt>类型</dt>
+          <dd>{{ currentDatasource?.type || currentLayer?.datasourceType || '-' }}</dd>
+          <dt>数据集</dt>
+          <dd>{{ currentDatasource?.dataset || currentLayer?.dataset || '-' }}</dd>
+          <dt v-if="currentLayer?.projectId">Project</dt>
+          <dd v-if="currentLayer?.projectId">{{ currentLayer.projectId }}</dd>
+          <dt>说明</dt>
+          <dd>{{ currentDatasource?.description || currentLayer?.description || '-' }}</dd>
+        </dl>
+      </div>
+
+      <!-- Status -->
+      <div class="status-panel">
+        <p class="card-title">状态</p>
+        <p :class="{ error: statusError }">{{ statusMessage }}</p>
+      </div>
     </aside>
 
     <main class="map-wrap">
       <div ref="mapRef" id="map" aria-label="Map"></div>
       <div class="coord-display">
-        <span>经度: {{ mouseCoord.lon }}</span>
-        <span>纬度: {{ mouseCoord.lat }}</span>
+        <span>LON {{ mouseCoord.lon }}</span>
+        <span>LAT {{ mouseCoord.lat }}</span>
       </div>
     </main>
 
     <div v-if="showDemSettings" class="modal-overlay" @click="showDemSettings = false">
       <div class="modal" @click.stop>
         <div class="modal-header">
-          <h2>DEM 渲染设置 - {{ activeLayer?.name }}</h2>
+          <h2>DEM 渲染设置</h2>
           <button class="close-btn" @click="showDemSettings = false">&times;</button>
         </div>
         <DemSettings 
@@ -239,13 +258,13 @@ function handleFileSelected(filePath) {
   loadHexagons(filePath)
 }
 
-async function sampleDem(save = false) {
+async function sampleDem() {
   isBusy.value = true
   const geojson = hexagonGeojson.value
   landcoverGeojson.value = null
 
   if (geojson?.features?.length > 500) {
-    setStatus(save ? '正在批量采样 DEM（分批次）...' : '正在批量采样 DEM（分批次）...')
+    setStatus('正在批量采样 DEM（分批次）...')
     try {
       const totalFeatures = geojson.features.length
       const totalBatches = Math.ceil(totalFeatures / 500)
@@ -294,13 +313,12 @@ async function sampleDem(save = false) {
     return
   }
 
-  setStatus(save ? '正在采样并保存 DEM 数据...' : '正在采样 DEM 数据...')
+  setStatus('正在采样 DEM 数据...')
 
   try {
-    const count = geojson?.features?.length || 0
     const payload = geojson
-      ? { geojson, save, datasourceId: 'dem-srtm', scale: 30 }
-      : { bounds: requireViewBounds(), save, datasourceId: 'dem-srtm', limit: 500, scale: 30 }
+      ? { geojson, save: false, datasourceId: 'dem-srtm', scale: 30 }
+      : { bounds: requireViewBounds(), save: false, datasourceId: 'dem-srtm', limit: 500, scale: 30 }
     const result = await requestSampleDem(payload)
 
     demGeojson.value = result.hexagons
@@ -308,8 +326,7 @@ async function sampleDem(save = false) {
     updateDemConfigFromFeatures(result.hexagons.features)
     setDemHexagons(result.hexagons, demConfig.value, { fit: false })
 
-    const savedMessage = result.savedPath ? `，已保存到 ${result.savedPath}` : ''
-    setStatus(`DEM 采样完成，共 ${result.sampledCount || 0} 个六角格${savedMessage}`)
+    setStatus(`DEM 采样完成，共 ${result.sampledCount || 0} 个六角格`)
     updateMapLayers()
   } catch (error) {
     setStatus(`采样失败：${error.message}`, true)
@@ -475,124 +492,6 @@ onMounted(() => {
 })
 </script>
 
-<style scoped>
+<style>
 @import './style.css';
-
-.sidebar {
-  max-height: 100vh;
-  overflow-y: auto;
-}
-
-.controls {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.controls button {
-  width: 100%;
-}
-
-.controls button:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.controls button.active {
-  background: linear-gradient(135deg, #22c55e, #3b82f6);
-}
-
-.modal-overlay {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: rgba(0, 0, 0, 0.75);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 9999;
-}
-
-.modal {
-  background: #0f1a30;
-  border-radius: 16px;
-  border: 1px solid rgba(160, 191, 255, 0.2);
-  width: 90%;
-  max-width: 800px;
-  max-height: 80vh;
-  display: flex;
-  flex-direction: column;
-}
-
-.modal-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 20px 24px;
-  border-bottom: 1px solid rgba(160, 191, 255, 0.14);
-}
-
-.modal-header h2 {
-  margin: 0;
-  font-size: 20px;
-}
-
-.close-btn {
-  background: transparent;
-  border: none;
-  color: #8ba7e8;
-  font-size: 28px;
-  cursor: pointer;
-  padding: 0;
-  line-height: 1;
-}
-
-.close-btn:hover {
-  color: #fff;
-}
-
-.modal-body {
-  padding: 24px;
-  overflow-y: auto;
-  flex: 1;
-}
-
-.modal-body pre {
-  background: rgba(9, 17, 31, 0.8);
-  padding: 16px;
-  border-radius: 8px;
-  overflow: auto;
-  max-height: 60vh;
-  font-size: 12px;
-  color: #d7e4ff;
-  border: 1px solid rgba(160, 191, 255, 0.14);
-}
-
-.coord-display {
-  position: absolute;
-  top: 32px;
-  right: 32px;
-  background: rgba(9, 17, 31, 0.82);
-  border: 1px solid rgba(160, 191, 255, 0.2);
-  border-radius: 10px;
-  padding: 8px 16px;
-  display: flex;
-  gap: 16px;
-  font-size: 13px;
-  color: #d7e4ff;
-  font-family: 'Courier New', monospace;
-  pointer-events: none;
-  z-index: 10;
-  backdrop-filter: blur(8px);
-}
-
-.coord-display span {
-  white-space: nowrap;
-}
-
-.map-wrap {
-  position: relative;
-}
 </style>

@@ -1,11 +1,12 @@
 <template>
-  <div class="file-picker-trigger">
-    <button type="button" class="hexagon-btn" @click="openDialog" :disabled="disabled">
-      <svg viewBox="0 0 100 100" class="hex-icon">
-        <polygon points="50,5 95,27.5 95,72.5 50,95 5,72.5 5,27.5" fill="none" stroke="currentColor" stroke-width="4" />
-        <text x="50" y="56" text-anchor="middle" fill="currentColor" font-size="14" font-weight="bold">+</text>
+  <div class="file-picker-wrap">
+    <button type="button" class="btn btn-full" @click="openDialog" :disabled="disabled">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <polygon points="12 2 22 8.5 22 15.5 12 22 2 15.5 2 8.5"/>
+        <line x1="12" y1="22" x2="12" y2="15.5"/>
+        <polyline points="22 8.5 12 15.5 2 8.5"/>
       </svg>
-      <span class="btn-label">{{ label }}</span>
+      {{ label }}
     </button>
 
     <div v-if="visible" class="modal-overlay" @click="closeDialog">
@@ -15,33 +16,80 @@
           <button class="close-btn" @click="closeDialog">&times;</button>
         </div>
         <div class="modal-body">
-          <div class="file-list">
-            <div class="file-list-header">
-              <span class="current-path">{{ currentPath }}</span>
+          <!-- Upload zone -->
+          <div class="upload-zone">
+            <label 
+              class="drop-target" 
+              :class="{ 'is-active': isDragOver, 'is-success': uploadSuccess }"
+              @dragover.prevent="isDragOver = true"
+              @dragleave.prevent="isDragOver = false"
+              @drop.prevent="onDrop"
+            >
+              <template v-if="uploading">
+                <span class="upload-status">上传中...</span>
+                <span class="upload-spinner"></span>
+              </template>
+              <template v-else-if="uploadSuccess">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--accent-green)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                  <polyline points="14 2 14 8 20 8"/>
+                  <line x1="16" y1="13" x2="8" y2="13"/>
+                  <line x1="16" y1="17" x2="8" y2="17"/>
+                  <polyline points="10 9 9 9 8 9"/>
+                </svg>
+                <span>{{ uploadFileName }}</span>
+              </template>
+              <template v-else>
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                  <polyline points="17 8 12 3 7 8"/>
+                  <line x1="12" y1="3" x2="12" y2="15"/>
+                </svg>
+                <span>拖拽或点击上传 .geojson / .json</span>
+              </template>
+              <input type="file" accept=".geojson,.json" hidden ref="fileInput" @change="onFileChange" />
+            </label>
+            <button v-if="uploadSuccess" class="btn btn-full" @click="refreshAfterUpload" style="margin-top: 8px;">
+              刷新文件列表
+            </button>
+          </div>
+
+          <!-- File browser -->
+          <div class="browser">
+            <div class="browser-header">
+              <span class="browser-path">{{ currentPath }}</span>
             </div>
-            <div class="file-items">
+            <div class="browser-items">
               <div
                 v-for="(item, index) in fileItems"
                 :key="index"
-                class="file-item"
+                class="browser-item"
                 :class="{ selected: selectedIndex === index }"
                 @click="selectItem(index)"
                 @dblclick="activateItem(index)"
               >
-                <span class="file-icon">{{ item.isDirectory ? '📁' : '📄' }}</span>
-                <span class="file-name">{{ item.name }}</span>
+                <span class="item-icon">
+                  <svg v-if="item.isDirectory" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent-amber)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+                  </svg>
+                  <svg v-else width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent-blue)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                    <polyline points="14 2 14 8 20 8"/>
+                  </svg>
+                </span>
+                <span class="item-name">{{ item.name }}</span>
               </div>
-              <div v-if="fileItems.length === 0" class="file-empty">
+              <div v-if="fileItems.length === 0" class="browser-empty">
                 文件夹为空
               </div>
             </div>
           </div>
         </div>
         <div class="modal-footer">
-          <span class="selected-info">{{ selectedInfo }}</span>
+          <span class="selection-info">{{ selectedInfo }}</span>
           <div class="footer-actions">
-            <button type="button" class="btn-cancel" @click="closeDialog">取消</button>
-            <button type="button" class="btn-save" @click="confirmSelection">选择</button>
+            <button class="btn" @click="closeDialog">取消</button>
+            <button class="btn btn-primary" @click="confirmSelection">选择</button>
           </div>
         </div>
       </div>
@@ -50,7 +98,7 @@
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 
 const props = defineProps({
   label: {
@@ -69,12 +117,18 @@ const props = defineProps({
 
 const emit = defineEmits(['file-selected'])
 
-const BASE_PATH = 'D:\\Code\\GEEAPP\\backend\\data'
-
+const dataRelativePath = ref('')
+const currentRelPath = ref('')
 const visible = ref(false)
-const currentPath = ref(BASE_PATH)
 const fileItems = ref([])
 const selectedIndex = ref(-1)
+const currentPath = ref('')
+
+const fileInput = ref(null)
+const isDragOver = ref(false)
+const uploading = ref(false)
+const uploadSuccess = ref(false)
+const uploadFileName = ref('')
 
 const selectedInfo = computed(() => {
   if (selectedIndex.value < 0) return '未选择文件'
@@ -82,10 +136,31 @@ const selectedInfo = computed(() => {
   return item.isDirectory ? `已选择文件夹: ${item.name}` : `已选择: ${item.name}`
 })
 
+onMounted(async () => {
+  try {
+    const response = await fetch('/api/fs/data-path')
+    const data = await response.json()
+    if (data.path) dataRelativePath.value = data.path
+  } catch {
+    dataRelativePath.value = 'data'
+  }
+})
+
 async function openDialog() {
-  currentPath.value = BASE_PATH
+  if (!dataRelativePath.value) {
+    try {
+      const response = await fetch('/api/fs/data-path')
+      const data = await response.json()
+      dataRelativePath.value = data.path || 'data'
+    } catch {
+      dataRelativePath.value = 'data'
+    }
+  }
+  currentRelPath.value = dataRelativePath.value
   selectedIndex.value = -1
-  await loadDirectory(BASE_PATH)
+  uploadSuccess.value = false
+  uploadFileName.value = ''
+  await loadDirectory(dataRelativePath.value)
   visible.value = true
 }
 
@@ -93,26 +168,26 @@ function closeDialog() {
   visible.value = false
   selectedIndex.value = -1
   fileItems.value = []
+  isDragOver.value = false
+  uploading.value = false
 }
 
-async function loadDirectory(dirPath) {
+async function loadDirectory(relPath) {
   try {
     const response = await fetch('/api/fs/list', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path: dirPath })
+      body: JSON.stringify({ path: relPath })
     })
     if (!response.ok) {
       const err = await response.json().catch(() => ({}))
       throw new Error(err.error || '无法读取目录')
     }
     const data = await response.json()
-    fileItems.value = (data.items || []).map((item, index) => ({
-      ...item,
-      _index: index
-    }))
-    currentPath.value = dirPath
-  } catch (error) {
+    fileItems.value = (data.items || []).map((item, index) => ({ ...item, _index: index }))
+    currentRelPath.value = relPath
+    currentPath.value = data.path
+  } catch {
     fileItems.value = []
   }
 }
@@ -124,9 +199,8 @@ function selectItem(index) {
 function activateItem(index) {
   const item = fileItems.value[index]
   if (!item) return
-
   if (item.isDirectory) {
-    const newPath = currentPath.value.replace(/\\+$/, '') + '\\' + item.name
+    const newPath = currentRelPath.value.replace(/[\\/]+$/, '') + '/' + item.name
     selectedIndex.value = -1
     loadDirectory(newPath)
   }
@@ -136,213 +210,198 @@ function confirmSelection() {
   if (selectedIndex.value < 0) return
   const item = fileItems.value[selectedIndex.value]
   if (item.isDirectory) return
-
-  const fullPath = currentPath.value.replace(/\\+$/, '') + '\\' + item.name
-  emit('file-selected', fullPath)
+  const fullRelPath = currentRelPath.value.replace(/[\\/]+$/, '') + '/' + item.name
+  emit('file-selected', fullRelPath)
   closeDialog()
+}
+
+function onDrop(e) {
+  isDragOver.value = false
+  const files = e.dataTransfer.files
+  if (files.length > 0) uploadFile(files[0])
+}
+
+function onFileChange(e) {
+  const files = e.target.files
+  if (files.length > 0) uploadFile(files[0])
+  if (fileInput.value) fileInput.value.value = ''
+}
+
+async function uploadFile(file) {
+  const ext = file.name.split('.').pop().toLowerCase()
+  if (ext !== 'geojson' && ext !== 'json') {
+    alert('仅支持 .geojson 或 .json 文件')
+    return
+  }
+
+  uploading.value = true
+  uploadSuccess.value = false
+  uploadFileName.value = ''
+
+  try {
+    const formData = new FormData()
+    formData.append('file', file)
+    const response = await fetch('/api/fs/upload', { method: 'POST', body: formData })
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}))
+      throw new Error(err.error || '上传失败')
+    }
+    const result = await response.json()
+    uploadSuccess.value = true
+    uploadFileName.value = result.fileName
+  } catch (error) {
+    alert(error.message)
+  } finally {
+    uploading.value = false
+  }
+}
+
+async function refreshAfterUpload() {
+  uploadSuccess.value = false
+  uploadFileName.value = ''
+  await loadDirectory(currentRelPath.value)
 }
 </script>
 
 <style scoped>
-.file-picker-trigger {
+.file-picker-wrap {
   width: 100%;
 }
 
-.hexagon-btn {
-  width: 100%;
+.upload-zone {
+  margin-bottom: 16px;
+}
+
+.drop-target {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
-  padding: 12px 14px;
-  border: 1px solid rgba(160, 191, 255, 0.2);
-  background: linear-gradient(135deg, #3b82f6, #22c55e);
-  color: #03101d;
-  border-radius: 12px;
-  font-weight: 700;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.hexagon-btn:hover:not(:disabled) {
-  opacity: 0.9;
-  transform: translateY(-1px);
-}
-
-.hexagon-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.hex-icon {
-  width: 24px;
-  height: 24px;
-  flex-shrink: 0;
-}
-
-.btn-label {
-  font-size: 14px;
-}
-
-.modal-overlay {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: rgba(0, 0, 0, 0.75);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 9999;
-}
-
-.modal {
-  background: #0f1a30;
-  border-radius: 16px;
-  border: 1px solid rgba(160, 191, 255, 0.2);
-  width: 90%;
-  max-width: 700px;
-  max-height: 80vh;
-  display: flex;
-  flex-direction: column;
-}
-
-.modal-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 20px 24px;
-  border-bottom: 1px solid rgba(160, 191, 255, 0.14);
-}
-
-.modal-header h2 {
-  margin: 0;
-  font-size: 20px;
-}
-
-.close-btn {
-  background: transparent;
-  border: none;
-  color: #8ba7e8;
-  font-size: 28px;
-  cursor: pointer;
-  padding: 0;
-  line-height: 1;
-}
-
-.close-btn:hover {
-  color: #fff;
-}
-
-.modal-body {
-  padding: 16px 24px;
-  overflow-y: auto;
-  flex: 1;
-  min-height: 200px;
-}
-
-.modal-footer {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 16px 24px;
-  border-top: 1px solid rgba(160, 191, 255, 0.14);
-}
-
-.selected-info {
-  font-size: 13px;
-  color: #8ba7e8;
-}
-
-.footer-actions {
-  display: flex;
-  gap: 12px;
-}
-
-.footer-actions button {
-  padding: 10px 24px;
-  border-radius: 10px;
-  font-size: 14px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.btn-cancel {
-  background: rgba(139, 167, 232, 0.15);
-  border: 1px solid rgba(139, 167, 232, 0.3);
-  color: #8ba7e8;
-}
-
-.btn-cancel:hover {
-  background: rgba(139, 167, 232, 0.25);
-}
-
-.btn-save {
-  background: linear-gradient(135deg, #3b82f6, #22c55e);
-  border: none;
-  color: #03101d;
-}
-
-.btn-save:hover {
-  opacity: 0.9;
-  transform: translateY(-1px);
-}
-
-.file-list-header {
-  margin-bottom: 12px;
-}
-
-.current-path {
+  gap: 10px;
+  padding: 20px 16px;
+  border: 2px dashed var(--border-mid);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
   font-size: 12px;
-  color: #8ba7e8;
+  cursor: pointer;
+  transition: all 0.15s;
+  text-align: center;
+  flex-wrap: wrap;
+}
+
+.drop-target:hover,
+.drop-target.is-active {
+  border-color: var(--accent-blue);
+  background: rgba(75, 139, 255, 0.08);
+  color: var(--text-secondary);
+}
+
+.drop-target.is-success {
+  border-color: var(--accent-green);
+  background: rgba(46, 213, 115, 0.06);
+}
+
+.upload-status {
+  color: var(--text-secondary);
+}
+
+.upload-spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--border-mid);
+  border-top-color: var(--accent-blue);
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.browser {
+  background: rgba(7, 11, 20, 0.4);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.browser-header {
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: rgba(7, 11, 20, 0.3);
+}
+
+.browser-path {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
   word-break: break-all;
 }
 
-.file-items {
+.browser-items {
+  max-height: 260px;
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 2px;
 }
 
-.file-item {
+.browser-items::-webkit-scrollbar {
+  width: 4px;
+}
+
+.browser-items::-webkit-scrollbar-thumb {
+  background: var(--border-subtle);
+  border-radius: 2px;
+}
+
+.browser-item {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 10px 12px;
-  border-radius: 8px;
+  padding: 8px 14px;
   cursor: pointer;
-  transition: background 0.15s;
+  transition: background 0.1s;
   user-select: none;
 }
 
-.file-item:hover {
-  background: rgba(59, 130, 246, 0.15);
+.browser-item:hover {
+  background: rgba(75, 139, 255, 0.08);
 }
 
-.file-item.selected {
-  background: rgba(59, 130, 246, 0.25);
-  border: 1px solid rgba(59, 130, 246, 0.3);
+.browser-item.selected {
+  background: rgba(75, 139, 255, 0.15);
+  border-left: 2px solid var(--accent-blue);
+  padding-left: 12px;
 }
 
-.file-icon {
-  font-size: 18px;
+.item-icon {
+  display: flex;
+  align-items: center;
   flex-shrink: 0;
 }
 
-.file-name {
-  font-size: 14px;
-  color: #eff4ff;
+.item-name {
+  font-size: 13px;
+  color: var(--text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.file-empty {
+.browser-empty {
   text-align: center;
-  padding: 40px 0;
-  color: #8ba7e8;
-  font-size: 14px;
+  padding: 32px 0;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.selection-info {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+}
+
+.footer-actions {
+  display: flex;
+  gap: 10px;
 }
 </style>

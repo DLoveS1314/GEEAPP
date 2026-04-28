@@ -1,6 +1,6 @@
 <template>
-  <div class="layer-panel">
-    <h3>图层管理</h3>
+  <div class="card">
+    <p class="card-title">图层管理</p>
     
     <div class="layer-list">
       <div 
@@ -9,48 +9,63 @@
         class="layer-item"
         :class="{ 'layer-hidden': !layer.visible }"
       >
-        <div class="layer-header">
-          <label class="visibility-toggle">
-            <input 
-              type="checkbox" 
-              :checked="layer.visible"
-              @change="$emit('visibility-change', layer.id, $event.target.checked)"
-            />
-            <span class="toggle-icon">{{ layer.visible ? '👁' : '👁‍🗨' }}</span>
-          </label>
-          
+        <div class="layer-row">
+          <!-- Visibility toggle -->
+          <button 
+            class="vis-btn" 
+            :class="{ active: layer.visible }"
+            @click="$emit('visibility-change', layer.id, !layer.visible)"
+            :title="layer.visible ? '隐藏图层' : '显示图层'"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path v-if="layer.visible" d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+              <circle v-if="layer.visible" cx="12" cy="12" r="3"/>
+              <path v-else d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/>
+              <line x1="1" y1="1" x2="23" y2="23"/>
+            </svg>
+          </button>
+
           <span class="layer-name">{{ layer.name }}</span>
-          
+
+          <div class="layer-badges">
+            <span class="badge" :class="'badge-' + layer.type">
+              {{ layer.type === 'gee' ? 'GEE' : layer.type === 'dem' ? 'DEM' : 'LC' }}
+            </span>
+          </div>
+
           <div class="layer-actions">
             <button 
               v-if="layer.hasDemSettings"
-              class="action-btn"
+              class="icon-btn"
               @click="$emit('dem-settings', layer)"
               title="DEM 渲染设置"
             >
-              🎨
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="3"/>
+                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+              </svg>
             </button>
             <button 
               v-if="layer.type === 'dem'"
-              class="action-btn"
+              class="icon-btn"
               @click="$emit('export-layer', layer.id)"
-              title="导出"
+              title="导出 GeoJSON"
             >
-              📥
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                <polyline points="7 10 12 15 17 10"/>
+                <line x1="12" y1="15" x2="12" y2="3"/>
+              </svg>
             </button>
           </div>
         </div>
-        
-        <div v-if="layer.hasDemSettings && layer.demConfig" class="layer-preview">
-          <div class="color-ramp-preview">
-            <div 
-              class="color-bar"
-              :style="getGradientStyle(layer.demConfig)"
-            ></div>
-            <div class="ramp-labels">
-              <span>{{ layer.demConfig.minDem }}m</span>
-              <span>{{ layer.demConfig.maxDem }}m</span>
-            </div>
+
+        <!-- Color ramp preview for DEM layers -->
+        <div v-if="layer.hasDemSettings && layer.demConfig" class="ramp-section">
+          <div class="ramp-bar" :style="getGradientStyle(layer.demConfig)"></div>
+          <div class="ramp-labels">
+            <span>{{ formatElevation(layer.demConfig.minDem) }}</span>
+            <span>{{ formatElevation(layer.demConfig.maxDem) }}</span>
           </div>
         </div>
       </div>
@@ -68,6 +83,11 @@ defineProps({
 
 defineEmits(['visibility-change', 'dem-settings', 'export-layer'])
 
+function formatElevation(val) {
+  if (val == null || !Number.isFinite(val)) return '—'
+  return `${Math.round(val)}m`
+}
+
 function getGradientStyle(config) {
   const colors = getDemColorRamp(config.colorRamp)
   const stops = colors.map((color, i) => {
@@ -82,10 +102,10 @@ function getGradientStyle(config) {
 function getDemColorRamp(rampName = 'default') {
   const ramps = {
     default: [
-      'rgba(44, 123, 182, 0.62)',
-      'rgba(171, 217, 233, 0.62)',
-      'rgba(255, 255, 191, 0.66)',
-      'rgba(253, 174, 97, 0.68)',
+      'rgba(44, 123, 182, 0.7)',
+      'rgba(171, 217, 233, 0.7)',
+      'rgba(255, 255, 191, 0.7)',
+      'rgba(253, 174, 97, 0.7)',
       'rgba(215, 25, 28, 0.7)'
     ],
     terrain: [
@@ -111,110 +131,165 @@ function getDemColorRamp(rampName = 'default') {
 </script>
 
 <style scoped>
-.layer-panel {
-  margin-top: 20px;
+.card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
   padding: 16px;
-  border-radius: 16px;
-  background: rgba(16, 28, 51, 0.82);
-  border: 1px solid rgba(160, 191, 255, 0.14);
+  box-shadow: var(--shadow-card);
 }
 
-.layer-panel h3 {
-  margin: 0 0 16px;
-  font-size: 16px;
-  color: #8ba7e8;
+.card-title {
+  font-size: 10px;
+  font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.1em;
+  color: var(--text-muted);
+  margin: 0 0 12px;
+  font-family: var(--font-mono);
 }
 
 .layer-list {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 8px;
 }
 
 .layer-item {
-  background: rgba(9, 17, 31, 0.6);
-  border-radius: 10px;
-  padding: 12px;
-  border: 1px solid rgba(160, 191, 255, 0.1);
-  transition: all 0.2s ease;
+  background: rgba(7, 11, 20, 0.4);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  border: 1px solid transparent;
+  transition: all 0.2s;
+}
+
+.layer-item:hover {
+  border-color: var(--border-subtle);
+  background: rgba(7, 11, 20, 0.55);
 }
 
 .layer-item.layer-hidden {
-  opacity: 0.6;
+  opacity: 0.5;
 }
 
-.layer-header {
+.layer-row {
   display: flex;
   align-items: center;
   gap: 10px;
 }
 
-.visibility-toggle {
+.vis-btn {
   display: flex;
   align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
   cursor: pointer;
+  transition: all 0.15s;
+  flex-shrink: 0;
+  padding: 0;
 }
 
-.visibility-toggle input {
-  display: none;
+.vis-btn.active {
+  background: rgba(45, 124, 246, 0.15);
+  border-color: rgba(45, 124, 246, 0.3);
+  color: var(--accent-blue);
 }
 
-.toggle-icon {
-  font-size: 18px;
-  filter: grayscale(0.3);
+.vis-btn:hover {
+  border-color: var(--border-mid);
 }
 
 .layer-name {
   flex: 1;
-  font-size: 14px;
-  color: #eff4ff;
+  font-size: 12px;
+  color: var(--text-primary);
+  font-weight: 500;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.layer-badges {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.badge {
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-family: var(--font-mono);
+}
+
+.badge-gee {
+  background: rgba(75, 139, 255, 0.15);
+  color: var(--accent-blue);
+}
+
+.badge-dem {
+  background: rgba(46, 213, 115, 0.15);
+  color: var(--accent-green);
+}
+
+.badge-lc {
+  background: rgba(245, 166, 35, 0.15);
+  color: var(--accent-amber);
 }
 
 .layer-actions {
   display: flex;
-  gap: 6px;
+  gap: 4px;
+  flex-shrink: 0;
 }
 
-.action-btn {
-  background: rgba(59, 130, 246, 0.2);
-  border: 1px solid rgba(59, 130, 246, 0.3);
-  color: #8ba7e8;
+.icon-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
   border-radius: 6px;
-  padding: 4px 8px;
-  font-size: 14px;
+  background: transparent;
+  color: var(--text-muted);
   cursor: pointer;
-  transition: all 0.2s;
+  transition: all 0.15s;
+  padding: 0;
 }
 
-.action-btn:hover {
-  background: rgba(59, 130, 246, 0.35);
-  color: #fff;
+.icon-btn:hover {
+  background: rgba(75, 139, 255, 0.12);
+  color: var(--accent-blue);
 }
 
-.layer-preview {
+.ramp-section {
   margin-top: 10px;
   padding-top: 10px;
-  border-top: 1px solid rgba(160, 191, 255, 0.08);
+  border-top: 1px solid var(--border-subtle);
 }
 
-.color-ramp-preview {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.color-bar {
-  height: 20px;
+.ramp-bar {
+  height: 16px;
   border-radius: 4px;
-  border: 1px solid rgba(160, 191, 255, 0.15);
+  border: 1px solid var(--border-subtle);
 }
 
 .ramp-labels {
   display: flex;
   justify-content: space-between;
-  font-size: 11px;
-  color: #8ba7e8;
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-top: 4px;
+  font-family: var(--font-mono);
 }
 </style>
