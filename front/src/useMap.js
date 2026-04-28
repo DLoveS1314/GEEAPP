@@ -179,6 +179,12 @@ function createRawHexagonStyle(color = HEX_LAYER_COLORS[0]) {
   })
 }
 
+function getManagedLayerStyle(mode = 'raw', options = {}) {
+  if (mode === 'dem') return createDemStyle(options.demConfig || {})
+  if (mode === 'landcover') return createLandcoverStyle()
+  return createRawHexagonStyle(options.color || HEX_LAYER_COLORS[0])
+}
+
 function createLandcoverStyle() {
   return function(feature) {
     const landcover = Number(feature.get('landcover'))
@@ -447,7 +453,10 @@ export function useMap() {
     const color = HEX_LAYER_COLORS[colorIndex % HEX_LAYER_COLORS.length]
     const vectorLayer = new VectorLayer({
       source,
-      style: createRawHexagonStyle(color),
+      style: getManagedLayerStyle(options.renderMode || 'raw', {
+        color,
+        demConfig: options.demConfig,
+      }),
       opacity: 0.95,
       visible: options.visible !== false,
       zIndex: 10 + colorIndex,
@@ -455,6 +464,8 @@ export function useMap() {
 
     removeManagedLayer(layerId)
     vectorLayer.set('managedLayerId', layerId)
+    vectorLayer.set('color', color)
+    vectorLayer.set('renderMode', options.renderMode || 'raw')
     managedHexLayers.set(layerId, vectorLayer)
     map.addLayer(vectorLayer)
 
@@ -463,6 +474,44 @@ export function useMap() {
     }
 
     clearFeatureSelection()
+  }
+
+  function updateManagedHexLayer(layerId, geojson, options = {}) {
+    const layer = managedHexLayers.get(layerId)
+    if (!layer) return false
+
+    const source = new VectorSource({
+      features: readGeojsonFeatures(geojson),
+    })
+    const renderMode = options.renderMode || layer.get('renderMode') || 'raw'
+    const color = layer.get('color') || HEX_LAYER_COLORS[0]
+
+    layer.setSource(source)
+    layer.set('renderMode', renderMode)
+    layer.setStyle(getManagedLayerStyle(renderMode, {
+      color,
+      demConfig: options.demConfig,
+    }))
+
+    if (options.fit === true) {
+      fitVectorSource(source, renderMode === 'dem' ? 10 : 12)
+    }
+
+    clearFeatureSelection()
+    return true
+  }
+
+  function renderManagedHexLayer(layerId, renderMode, options = {}) {
+    const layer = managedHexLayers.get(layerId)
+    if (!layer) return false
+
+    const color = layer.get('color') || HEX_LAYER_COLORS[0]
+    layer.set('renderMode', renderMode)
+    layer.setStyle(getManagedLayerStyle(renderMode, {
+      color,
+      demConfig: options.demConfig,
+    }))
+    return true
   }
 
   function clearAnalysisLayer() {
@@ -555,6 +604,8 @@ export function useMap() {
     setRawHexagons,
     setLandcoverHexagons,
     addRawHexagonLayer,
+    updateManagedHexLayer,
+    renderManagedHexLayer,
     clearAnalysisLayer,
     addLayer,
     removeLayer,

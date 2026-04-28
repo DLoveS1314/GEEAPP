@@ -17,6 +17,7 @@ import cors from 'cors';
 import healthRouter from './routes/health.js';
 import geeRouter from './routes/gee.js';
 import fsRouter from './routes/fs.js';
+import hexRouter from './routes/hex.js';
 
 // 获取当前文件的绝对路径（ES Module 中替代 __dirname）
 const __filename = fileURLToPath(import.meta.url);
@@ -31,7 +32,7 @@ export function createApp() {
   const app = express();
   
   // 从环境变量读取前端地址，默认允许本地开发端口
-  const frontendOrigin = process.env.FRONTEND_ORIGIN || 'http://localhost:5173';
+  const frontendOrigin = process.env.FRONTEND_ORIGIN || 'http://localhost:5174';
 
   // ========== 中间件配置 ==========
   
@@ -71,6 +72,7 @@ export function createApp() {
         '/api/gee/layers/sentinel-rgb',
         '/api/gee/geojson/hexagons',
         '/api/gee/dem/sample',
+        '/api/hex/datasets',
       ],
     });
   });
@@ -83,6 +85,9 @@ export function createApp() {
 
   // 挂载文件系统浏览路由
   app.use('/api/fs', fsRouter);
+
+  // 挂载 PostgreSQL 六角格数据集路由
+  app.use('/api/hex', hexRouter);
 
   // ========== 错误处理 ==========
   

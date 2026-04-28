@@ -35,6 +35,39 @@
 
           <div class="layer-actions">
             <button 
+              v-if="layer.canSampleDem"
+              class="text-btn"
+              @click="$emit('sample-dem', layer.id)"
+              title="采样 DEM 并写入数据库"
+            >DEM</button>
+            <button 
+              v-if="layer.canSampleLandcover"
+              class="text-btn"
+              @click="$emit('sample-landcover', layer.id)"
+              title="采样地表覆盖并写入数据库"
+            >LC</button>
+            <button 
+              v-if="layer.canRenderDem"
+              class="text-btn"
+              :class="{ active: layer.renderMode === 'dem' }"
+              @click="$emit('render-layer', layer.id, 'dem')"
+              title="按 DEM 属性渲染"
+            >按DEM</button>
+            <button 
+              v-if="layer.canRenderLandcover"
+              class="text-btn"
+              :class="{ active: layer.renderMode === 'landcover' }"
+              @click="$emit('render-layer', layer.id, 'landcover')"
+              title="按地表覆盖属性渲染"
+            >按LC</button>
+            <button 
+              v-if="layer.canRenderRaw"
+              class="text-btn"
+              :class="{ active: layer.renderMode === 'raw' }"
+              @click="$emit('render-layer', layer.id, 'raw')"
+              title="恢复原始六角格渲染"
+            >原始</button>
+            <button 
               v-if="layer.canZoom"
               class="icon-btn"
               @click="$emit('zoom-layer', layer.id)"
@@ -109,7 +142,16 @@ defineProps({
   }
 })
 
-defineEmits(['visibility-change', 'dem-settings', 'export-layer', 'delete-layer', 'zoom-layer'])
+defineEmits([
+  'visibility-change',
+  'dem-settings',
+  'export-layer',
+  'delete-layer',
+  'zoom-layer',
+  'sample-dem',
+  'sample-landcover',
+  'render-layer'
+])
 
 function getLayerTypeLabel(type) {
   const labels = {
@@ -298,6 +340,27 @@ function getDemColorRamp(rampName = 'default') {
   display: flex;
   gap: 4px;
   flex-shrink: 0;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.text-btn {
+  height: 28px;
+  border: none;
+  border-radius: 6px;
+  background: rgba(75, 139, 255, 0.08);
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 0 7px;
+  transition: all 0.15s;
+}
+
+.text-btn:hover,
+.text-btn.active {
+  background: rgba(75, 139, 255, 0.18);
+  color: var(--accent-blue);
 }
 
 .icon-btn {

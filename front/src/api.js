@@ -85,3 +85,50 @@ export function sampleDem(payload) {
     body: payload
   })
 }
+
+/**
+ * Imports a GeoJSON file from backend/data into the PostgreSQL hex table
+ * registry. The returned dataset ID remains the stable layer identity used by
+ * later export, delete, and sampling operations.
+ */
+export function importHexDataset(payload) {
+  return request('/api/hex/import-file', {
+    method: 'POST',
+    body: payload
+  })
+}
+
+export function fetchHexDatasets() {
+  return request('/api/hex/datasets')
+}
+
+export function fetchHexDatasetGeojson(datasetId, params = {}) {
+  return request(`/api/hex/datasets/${datasetId}/geojson${toQuery(params)}`)
+}
+
+export function updateHexDatasetVisibility(datasetId, visible) {
+  return request(`/api/hex/datasets/${datasetId}/visibility`, {
+    method: 'PATCH',
+    body: { visible }
+  })
+}
+
+export function deleteHexDataset(datasetId) {
+  return request(`/api/hex/datasets/${datasetId}`, {
+    method: 'DELETE'
+  })
+}
+
+export function sampleHexDatasetDemBatch(datasetId, payload) {
+  return request(`/api/hex/datasets/${datasetId}/dem/sample-batch`, {
+    method: 'POST',
+    body: payload
+  })
+}
+
+export function sampleHexDatasetLandcoverBatch(datasetId, payload) {
+  return request(`/api/hex/datasets/${datasetId}/landcover/sample-batch`, {
+    method: 'POST',
+    body: payload
+  })
+}
