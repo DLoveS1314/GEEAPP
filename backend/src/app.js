@@ -51,7 +51,7 @@ export function createApp() {
    * 
    * 使服务器能够解析 Content-Type: application/json 的请求
    */
-  app.use(express.json({ limit: '25mb' }));
+  app.use(express.json({ limit: '200mb' }));
 
   // ========== 路由配置 ==========
   

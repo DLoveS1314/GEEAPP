@@ -56,11 +56,13 @@
 
       <!-- Layer panel -->
       <LayerPanel 
-        v-if="currentLayer"
+        v-if="mapLayers.length"
         :layers="mapLayers"
         @visibility-change="handleVisibilityChange"
         @dem-settings="handleDemSettings"
         @export-layer="handleExportLayer"
+        @delete-layer="handleDeleteLayer"
+        @zoom-layer="handleZoomLayer"
       />
 
       <!-- Metadata -->
@@ -125,7 +127,9 @@ const availableDataSources = ref([])
 const currentLayer = ref(null)
 const statusMessage = ref('正在初始化...')
 const statusError = ref(false)
-const hexagonGeojson = ref(null)
+const hexagonLayers = ref([])
+const activeHexagonLayerId = ref(null)
+const hexagonLayerSerial = ref(0)
 const demGeojson = ref(null)
 const landcoverGeojson = ref(null)
 const showDemSettings = ref(false)
@@ -133,6 +137,8 @@ const activeLayer = ref(null)
 const mapLayers = ref([])
 const rawDataVisible = ref(false)
 const isBusy = ref(false)
+const geeLayerVisible = ref(true)
+const analysisLayerVisible = ref(false)
 const demConfig = ref({
   colorRamp: 'default',
   minDem: null,
@@ -146,8 +152,11 @@ const {
   initMap,
   setGeeLayer,
   setDemHexagons,
-  setRawHexagons,
   setLandcoverHexagons,
+  addRawHexagonLayer,
+  clearAnalysisLayer,
+  removeManagedLayer,
+  zoomToLayer,
   updateLayerVisibility,
   updateLayerDemStyle,
   setRawDataStyle,
@@ -160,6 +169,13 @@ const currentDatasource = computed(() => {
   return availableDataSources.value.find((source) => source.id === selectedDatasourceId.value) || null
 })
 
+const activeHexagonLayer = computed(() => {
+  const explicitLayer = hexagonLayers.value.find((layer) => layer.id === activeHexagonLayerId.value)
+  return explicitLayer || hexagonLayers.value[hexagonLayers.value.length - 1] || null
+})
+
+const hexagonGeojson = computed(() => activeHexagonLayer.value?.geojson || null)
+
 function setStatus(message, isError = false) {
   statusMessage.value = message
   statusError.value = isError
@@ -171,6 +187,20 @@ function requireViewBounds() {
     throw new Error('无法获取当前地图视图范围')
   }
   return bounds
+}
+
+function getFileName(filePath) {
+  return filePath?.split(/[\\/]/).filter(Boolean).pop() || ''
+}
+
+function sanitizeDownloadName(name) {
+  return name.replace(/[^a-z0-9\u4e00-\u9fa5_-]+/gi, '-').replace(/^-+|-+$/g, '') || 'hexagons'
+}
+
+function makeHexagonLayerName(filePath, serial, featureCount) {
+  const fileName = getFileName(filePath)
+  const baseName = fileName ? fileName.replace(/\.[^.]+$/, '') : `视图六角格 ${serial + 1}`
+  return `${baseName} (${featureCount})`
 }
 
 async function bootstrap() {
@@ -205,6 +235,7 @@ async function loadLayer() {
     }
 
     currentLayer.value = layer
+    geeLayerVisible.value = true
     setGeeLayer(layer)
     setStatus(`图层已加载：${layer.name}`)
     updateMapLayers()
@@ -240,12 +271,31 @@ async function loadHexagons(filePath = null) {
       const bounds = requireViewBounds()
       geojson = await fetchHexagonGeojson({ bounds, limit: 500 })
     }
-    hexagonGeojson.value = geojson
     demGeojson.value = null
     landcoverGeojson.value = null
+    analysisLayerVisible.value = false
     rawDataVisible.value = true
-    setRawHexagons(geojson, { fit: false })
-    setStatus(`已加载六角格 ${geojson.features?.length || 0} 个`)
+
+    // 每次加载六角格都创建独立图层，避免新文件覆盖已有文件；
+    // activeHexagonLayerId 只决定后续采样默认使用哪一层。
+    const featureCount = geojson.features?.length || 0
+    const serial = hexagonLayerSerial.value++
+    const layerId = `hex-${Date.now()}-${serial}`
+    const layerName = makeHexagonLayerName(filePath, serial, featureCount)
+    const nextLayer = {
+      id: layerId,
+      name: layerName,
+      type: 'hex',
+      visible: true,
+      geojson,
+      featureCount,
+    }
+
+    clearAnalysisLayer()
+    hexagonLayers.value = [...hexagonLayers.value, nextLayer]
+    activeHexagonLayerId.value = layerId
+    addRawHexagonLayer(layerId, geojson, { fit: !!filePath, colorIndex: serial })
+    setStatus(`已添加六角格图层：${layerName}`)
     updateMapLayers()
   } catch (error) {
     setStatus(error.message, true)
@@ -297,6 +347,7 @@ async function sampleDem() {
           features: sampledFeatures.filter(Boolean)
         }
         demGeojson.value = partialGeojson
+        analysisLayerVisible.value = true
         rawDataVisible.value = false
         updateDemConfigFromFeatures(partialGeojson.features)
         setDemHexagons(partialGeojson, demConfig.value, { fit: false })
@@ -304,6 +355,7 @@ async function sampleDem() {
       }
 
       const allFiltered = sampledFeatures.filter(Boolean)
+      analysisLayerVisible.value = true
       setStatus(`DEM 采样完成，共 ${allFiltered.length} 个六角格`)
     } catch (error) {
       setStatus(`采样失败：${error.message}`, true)
@@ -322,6 +374,7 @@ async function sampleDem() {
     const result = await requestSampleDem(payload)
 
     demGeojson.value = result.hexagons
+    analysisLayerVisible.value = true
     rawDataVisible.value = false
     updateDemConfigFromFeatures(result.hexagons.features)
     setDemHexagons(result.hexagons, demConfig.value, { fit: false })
@@ -377,6 +430,7 @@ async function sampleLandcover() {
       }
       landcoverGeojson.value = partialGeojson
       demGeojson.value = null
+      analysisLayerVisible.value = true
       rawDataVisible.value = false
       setLandcoverHexagons(partialGeojson, { fit: false })
       updateMapLayers()
@@ -393,50 +447,96 @@ async function sampleLandcover() {
 function toggleRawData() {
   if (rawDataVisible.value && demGeojson.value) {
     setDemHexagons(demGeojson.value, demConfig.value, { fit: false })
+    analysisLayerVisible.value = true
     rawDataVisible.value = false
     setStatus('已切换为 DEM 渲染模式')
+    updateMapLayers()
     return
   }
 
   if (hexagonGeojson.value) {
-    setRawHexagons(hexagonGeojson.value, { fit: false })
+    if (demGeojson.value || landcoverGeojson.value) {
+      updateLayerVisibility('dem', false)
+      analysisLayerVisible.value = false
+    }
+    if (activeHexagonLayerId.value) {
+      updateLayerVisibility(activeHexagonLayerId.value, true)
+      setLayerVisibleState(activeHexagonLayerId.value, true)
+    }
     rawDataVisible.value = true
-    setStatus('已显示原始 L4 六角格')
+    setStatus('已显示当前原始六角格图层')
+    updateMapLayers()
     return
   }
 
   if (demGeojson.value) {
     setRawDataStyle()
+    analysisLayerVisible.value = true
     rawDataVisible.value = true
     setStatus('已显示 DEM 采样标签')
+    updateMapLayers()
   }
 }
 
 function updateMapLayers() {
-  mapLayers.value = [
+  const layers = [
     {
       id: 'gee',
       name: currentLayer.value?.name || currentDatasource.value?.name || 'GEE 图层',
       type: 'gee',
-      visible: true,
-      hasDemSettings: false
-    },
-    {
-      id: 'dem',
-      name: landcoverGeojson.value ? '地表覆盖采样六角格' : (demGeojson.value ? 'DEM 采样六角格' : 'L4 六角格'),
-      type: landcoverGeojson.value ? 'landcover' : 'dem',
-      visible: true,
-      hasDemSettings: Boolean(demGeojson.value),
-      demConfig: demConfig.value
+      visible: geeLayerVisible.value,
+      hasDemSettings: false,
+      canZoom: Boolean(currentLayer.value)
     }
   ]
+
+  if (demGeojson.value || landcoverGeojson.value) {
+    layers.push({
+      id: 'dem',
+      name: landcoverGeojson.value ? '地表覆盖采样六角格' : 'DEM 采样六角格',
+      type: landcoverGeojson.value ? 'landcover' : 'dem',
+      visible: analysisLayerVisible.value,
+      hasDemSettings: Boolean(demGeojson.value),
+      demConfig: demConfig.value,
+      canExport: true,
+      canZoom: true
+    })
+  }
+
+  // 图层面板使用轻量元数据渲染，GeoJSON 原文仍保存在 hexagonLayers 中供导出使用。
+  layers.push(...hexagonLayers.value.map((layer) => ({
+    id: layer.id,
+    name: layer.name,
+    type: 'hex',
+    visible: layer.visible,
+    featureCount: layer.featureCount,
+    hasDemSettings: false,
+    canExport: true,
+    canDelete: true,
+    canZoom: true
+  })))
+
+  mapLayers.value = layers
 }
 
 function handleVisibilityChange(layerId, visible) {
   const layer = mapLayers.value.find((item) => item.id === layerId)
   if (layer) {
     layer.visible = visible
+    setLayerVisibleState(layerId, visible)
     updateLayerVisibility(layerId, visible)
+  }
+}
+
+function setLayerVisibleState(layerId, visible) {
+  if (layerId === 'gee') {
+    geeLayerVisible.value = visible
+  } else if (layerId === 'dem') {
+    analysisLayerVisible.value = visible
+  } else {
+    hexagonLayers.value = hexagonLayers.value.map((layer) => (
+      layer.id === layerId ? { ...layer, visible } : layer
+    ))
   }
 }
 
@@ -469,21 +569,54 @@ function updateDemConfigFromFeatures(features) {
 
 function handleExportLayer(layerId) {
   const layer = mapLayers.value.find((item) => item.id === layerId)
-  if (!layer || layer.type !== 'dem' || !demGeojson.value) {
-    setStatus('当前没有可导出的 DEM 采样结果', true)
+  const hexLayer = hexagonLayers.value.find((item) => item.id === layerId)
+  const exportGeojson = hexLayer?.geojson || (layer?.type === 'landcover' ? landcoverGeojson.value : demGeojson.value)
+
+  if (!layer || !exportGeojson) {
+    setStatus('当前图层没有可导出的 GeoJSON 数据', true)
     return
   }
 
-  const blob = new Blob([JSON.stringify(demGeojson.value, null, 2)], {
+  const blob = new Blob([JSON.stringify(exportGeojson, null, 2)], {
     type: 'application/json'
   })
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
-  a.download = `dem-hexagons-${Date.now()}.json`
+  a.download = `${sanitizeDownloadName(layer.name)}-${Date.now()}.geojson`
   a.click()
   URL.revokeObjectURL(url)
-  setStatus('DEM 数据已导出')
+  setStatus(`图层已导出：${layer.name}`)
+}
+
+function handleDeleteLayer(layerId) {
+  const layer = hexagonLayers.value.find((item) => item.id === layerId)
+  if (!layer) {
+    setStatus('只能删除已加载的六角格图层', true)
+    return
+  }
+
+  removeManagedLayer(layerId)
+  hexagonLayers.value = hexagonLayers.value.filter((item) => item.id !== layerId)
+
+  if (activeHexagonLayerId.value === layerId) {
+    const fallbackLayer = hexagonLayers.value[hexagonLayers.value.length - 1]
+    activeHexagonLayerId.value = fallbackLayer?.id || null
+  }
+
+  rawDataVisible.value = Boolean(activeHexagonLayerId.value)
+  setStatus(`已从地图删除六角格图层：${layer.name}`)
+  updateMapLayers()
+}
+
+function handleZoomLayer(layerId) {
+  const layer = mapLayers.value.find((item) => item.id === layerId)
+  if (!layer || !zoomToLayer(layerId)) {
+    setStatus('当前图层没有可定位的范围', true)
+    return
+  }
+
+  setStatus(`已定位到图层：${layer.name}`)
 }
 
 onMounted(() => {

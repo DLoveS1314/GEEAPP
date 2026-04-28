@@ -29,11 +29,25 @@
 
           <div class="layer-badges">
             <span class="badge" :class="'badge-' + layer.type">
-              {{ layer.type === 'gee' ? 'GEE' : layer.type === 'dem' ? 'DEM' : 'LC' }}
+              {{ getLayerTypeLabel(layer.type) }}
             </span>
           </div>
 
           <div class="layer-actions">
+            <button 
+              v-if="layer.canZoom"
+              class="icon-btn"
+              @click="$emit('zoom-layer', layer.id)"
+              title="定位到图层"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="7"/>
+                <line x1="12" y1="3" x2="12" y2="6"/>
+                <line x1="12" y1="18" x2="12" y2="21"/>
+                <line x1="3" y1="12" x2="6" y2="12"/>
+                <line x1="18" y1="12" x2="21" y2="12"/>
+              </svg>
+            </button>
             <button 
               v-if="layer.hasDemSettings"
               class="icon-btn"
@@ -46,7 +60,7 @@
               </svg>
             </button>
             <button 
-              v-if="layer.type === 'dem'"
+              v-if="layer.canExport"
               class="icon-btn"
               @click="$emit('export-layer', layer.id)"
               title="导出 GeoJSON"
@@ -55,6 +69,20 @@
                 <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
                 <polyline points="7 10 12 15 17 10"/>
                 <line x1="12" y1="15" x2="12" y2="3"/>
+              </svg>
+            </button>
+            <button 
+              v-if="layer.canDelete"
+              class="icon-btn icon-btn-danger"
+              @click="$emit('delete-layer', layer.id)"
+              title="删除图层"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="3 6 5 6 21 6"/>
+                <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+                <path d="M10 11v6"/>
+                <path d="M14 11v6"/>
+                <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
               </svg>
             </button>
           </div>
@@ -81,7 +109,17 @@ defineProps({
   }
 })
 
-defineEmits(['visibility-change', 'dem-settings', 'export-layer'])
+defineEmits(['visibility-change', 'dem-settings', 'export-layer', 'delete-layer', 'zoom-layer'])
+
+function getLayerTypeLabel(type) {
+  const labels = {
+    gee: 'GEE',
+    dem: 'DEM',
+    landcover: 'LC',
+    hex: 'HEX',
+  }
+  return labels[type] || type?.toUpperCase() || 'LAYER'
+}
 
 function formatElevation(val) {
   if (val == null || !Number.isFinite(val)) return '—'
@@ -246,6 +284,16 @@ function getDemColorRamp(rampName = 'default') {
   color: var(--accent-amber);
 }
 
+.badge-landcover {
+  background: rgba(245, 166, 35, 0.15);
+  color: var(--accent-amber);
+}
+
+.badge-hex {
+  background: rgba(46, 213, 115, 0.15);
+  color: var(--accent-green);
+}
+
 .layer-actions {
   display: flex;
   gap: 4px;
@@ -270,6 +318,11 @@ function getDemColorRamp(rampName = 'default') {
 .icon-btn:hover {
   background: rgba(75, 139, 255, 0.12);
   color: var(--accent-blue);
+}
+
+.icon-btn-danger:hover {
+  background: rgba(231, 76, 94, 0.12);
+  color: var(--accent-red);
 }
 
 .ramp-section {

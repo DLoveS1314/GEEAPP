@@ -1,5 +1,5 @@
 import { ref } from 'vue'
-import Map from 'ol/Map.js'
+import OlMap from 'ol/Map.js'
 import View from 'ol/View.js'
 import TileLayer from 'ol/layer/Tile.js'
 import VectorLayer from 'ol/layer/Vector.js'
@@ -40,10 +40,23 @@ const LANDCOVER_COLORS = {
 
 let map = null
 let geeLayer = null
+let geeLayerConfig = null
 let demHexLayer = null
 let highlightLayer = null
 let popupOverlay = null
 let selectedFeature = null
+const managedHexLayers = new Map()
+
+// Loaded hexagon files are independent map layers. Keeping them in a registry
+// lets the UI export, delete, hide, and zoom individual files without
+// replacing the current DEM / landcover analysis layer.
+const HEX_LAYER_COLORS = [
+  '34, 197, 94',
+  '45, 124, 246',
+  '245, 166, 35',
+  '168, 85, 247',
+  '20, 184, 166',
+]
 
 function getDemColor(dem, config = {}) {
   const {
@@ -154,13 +167,13 @@ function createRawDataStyle() {
   }
 }
 
-function createRawHexagonStyle() {
+function createRawHexagonStyle(color = HEX_LAYER_COLORS[0]) {
   return new Style({
     fill: new Fill({
-      color: 'rgba(34, 197, 94, 0.08)',
+      color: `rgba(${color}, 0.08)`,
     }),
     stroke: new Stroke({
-      color: 'rgba(34, 197, 94, 0.9)',
+      color: `rgba(${color}, 0.9)`,
       width: 1.2,
     }),
   })
@@ -206,6 +219,29 @@ function createHighlightStyle() {
   })
 }
 
+function readGeojsonFeatures(geojson) {
+  return new GeoJSON().readFeatures(geojson, {
+    featureProjection: 'EPSG:3857',
+  })
+}
+
+function fitVectorSource(source, maxZoom = 12) {
+  if (!map || !source?.getFeatures().length) return false
+
+  map.getView().fit(source.getExtent(), {
+    padding: [60, 60, 60, 60],
+    duration: 500,
+    maxZoom,
+  })
+  return true
+}
+
+function clearFeatureSelection() {
+  highlightLayer?.getSource().clear()
+  selectedFeature = null
+  popupOverlay?.setPosition(undefined)
+}
+
 export function useMap() {
   const mapRef = ref(null)
   const mouseCoord = ref({ lon: '', lat: '' })
@@ -223,7 +259,8 @@ export function useMap() {
       source: new VectorSource(),
       style: createDemStyle(),
       opacity: 0.9,
-      visible: true,
+      visible: false,
+      zIndex: 20,
     })
 
     highlightLayer = new VectorLayer({
@@ -246,7 +283,7 @@ export function useMap() {
       autoPan: { animation: { duration: 250 } },
     })
 
-    map = new Map({
+    map = new OlMap({
       target,
       layers: [geeLayer, demHexLayer, highlightLayer],
       overlays: [popupOverlay],
@@ -311,6 +348,8 @@ export function useMap() {
   function setGeeLayer(layerConfig) {
     if (!geeLayer || !map) return
 
+    geeLayerConfig = layerConfig
+
     geeLayer.setSource(
       new XYZ({
         url: layerConfig.url,
@@ -334,9 +373,7 @@ export function useMap() {
   function setDemHexagons(geojson, config = {}, options = {}) {
     if (!demHexLayer || !map) return
 
-    const features = new GeoJSON().readFeatures(geojson, {
-      featureProjection: 'EPSG:3857',
-    })
+    const features = readGeojsonFeatures(geojson)
 
     if (config.minDem == null || config.maxDem == null) {
       let min = Infinity
@@ -356,68 +393,114 @@ export function useMap() {
     const source = new VectorSource({ features })
     demHexLayer.setSource(source)
     demHexLayer.setStyle(createDemStyle(config))
+    demHexLayer.setVisible(true)
 
     if (options.fit !== false && features.length > 0) {
-      map.getView().fit(source.getExtent(), {
-        padding: [60, 60, 60, 60],
-        duration: 500,
-        maxZoom: 10,
-      })
+      fitVectorSource(source, 10)
     }
 
-    highlightLayer.getSource().clear()
-    selectedFeature = null
-    popupOverlay.setPosition(undefined)
+    clearFeatureSelection()
   }
 
   function setRawHexagons(geojson, options = {}) {
     if (!demHexLayer || !map) return
 
     const source = new VectorSource({
-      features: new GeoJSON().readFeatures(geojson, {
-        featureProjection: 'EPSG:3857',
-      }),
+      features: readGeojsonFeatures(geojson),
     })
 
     demHexLayer.setSource(source)
     demHexLayer.setStyle(createRawHexagonStyle())
+    demHexLayer.setVisible(true)
 
     if (options.fit !== false && source.getFeatures().length > 0) {
-      map.getView().fit(source.getExtent(), {
-        padding: [60, 60, 60, 60],
-        duration: 500,
-        maxZoom: 12,
-      })
+      fitVectorSource(source, 12)
     }
 
-    highlightLayer.getSource().clear()
-    selectedFeature = null
-    popupOverlay.setPosition(undefined)
+    clearFeatureSelection()
   }
 
   function setLandcoverHexagons(geojson, options = {}) {
     if (!demHexLayer || !map) return
 
     const source = new VectorSource({
-      features: new GeoJSON().readFeatures(geojson, {
-        featureProjection: 'EPSG:3857',
-      }),
+      features: readGeojsonFeatures(geojson),
     })
 
     demHexLayer.setSource(source)
     demHexLayer.setStyle(createLandcoverStyle())
+    demHexLayer.setVisible(true)
 
     if (options.fit !== false && source.getFeatures().length > 0) {
-      map.getView().fit(source.getExtent(), {
-        padding: [60, 60, 60, 60],
-        duration: 500,
-        maxZoom: 12,
-      })
+      fitVectorSource(source, 12)
     }
 
-    highlightLayer.getSource().clear()
-    selectedFeature = null
-    popupOverlay.setPosition(undefined)
+    clearFeatureSelection()
+  }
+
+  function addRawHexagonLayer(layerId, geojson, options = {}) {
+    if (!map || !layerId) return
+
+    const features = readGeojsonFeatures(geojson)
+    const source = new VectorSource({ features })
+    const colorIndex = Number.isFinite(options.colorIndex) ? options.colorIndex : 0
+    const color = HEX_LAYER_COLORS[colorIndex % HEX_LAYER_COLORS.length]
+    const vectorLayer = new VectorLayer({
+      source,
+      style: createRawHexagonStyle(color),
+      opacity: 0.95,
+      visible: options.visible !== false,
+      zIndex: 10 + colorIndex,
+    })
+
+    removeManagedLayer(layerId)
+    vectorLayer.set('managedLayerId', layerId)
+    managedHexLayers.set(layerId, vectorLayer)
+    map.addLayer(vectorLayer)
+
+    if (options.fit !== false) {
+      fitVectorSource(source, 12)
+    }
+
+    clearFeatureSelection()
+  }
+
+  function clearAnalysisLayer() {
+    if (!demHexLayer) return
+
+    demHexLayer.setSource(new VectorSource())
+    demHexLayer.setVisible(false)
+    clearFeatureSelection()
+  }
+
+  function removeManagedLayer(layerId) {
+    const layer = managedHexLayers.get(layerId)
+    if (!map || !layer) return false
+
+    map.removeLayer(layer)
+    managedHexLayers.delete(layerId)
+    clearFeatureSelection()
+    return true
+  }
+
+  function zoomToLayer(layerId) {
+    if (!map) return false
+
+    if (layerId === 'gee' && geeLayerConfig) {
+      const center = geeLayerConfig.center || [121.334757975, 25.09106329]
+      const zoom = geeLayerConfig.zoom || 11
+
+      map.getView().animate({
+        center: fromLonLat(center),
+        zoom,
+        duration: 400,
+      })
+      return true
+    }
+
+    const vectorLayer = layerId === 'dem' ? demHexLayer : managedHexLayers.get(layerId)
+    const source = vectorLayer?.getSource()
+    return fitVectorSource(source, layerId === 'dem' ? 10 : 12)
   }
 
   function addLayer(layer) {
@@ -437,6 +520,8 @@ export function useMap() {
       geeLayer.setVisible(visible)
     } else if (layerId === 'dem' && demHexLayer) {
       demHexLayer.setVisible(visible)
+    } else if (managedHexLayers.has(layerId)) {
+      managedHexLayers.get(layerId).setVisible(visible)
     }
   }
 
@@ -469,8 +554,12 @@ export function useMap() {
     setDemHexagons,
     setRawHexagons,
     setLandcoverHexagons,
+    addRawHexagonLayer,
+    clearAnalysisLayer,
     addLayer,
     removeLayer,
+    removeManagedLayer,
+    zoomToLayer,
     updateLayerVisibility,
     updateLayerDemStyle,
     setRawDataStyle,
